@@ -1,0 +1,20 @@
+# Arduino build
+*.elf
+*.hex
+build/
+.build/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+.eggs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
