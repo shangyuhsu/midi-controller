@@ -12,6 +12,12 @@ Adafruit_SSD1306 display_r(128, 32, &TCA_R_WIRE, -1);
 
 IntervalTimer scan_timer;
 #define SYSEX_BUF_SIZE 128
+/** Set to 0 to disable Serial spam from Ableton → controller MIDI/Sysex. */
+#ifndef LOG_ABLETON_MIDI
+#define LOG_ABLETON_MIDI 1
+#endif
+/** Cubefish knob sysex: ... enc, SYNC_TAG, midi_byte, display... */
+#define CUBEFISH_KNOB_SYNC_TAG 0x01
 byte sysex_buf[SYSEX_BUF_SIZE];
 int sysex_index = 0;
 uint8_t prev_display = TCA_R;
@@ -58,7 +64,7 @@ Adafruit_SSD1306 * set_display(uint8_t bus){
 }
 
 void init_displays() {
-  Serial.println("Initializing displays");
+  Serial.println("Initializing displayz");
   TCA_WIRE.beginTransmission(TCA_L);
   TCA_WIRE.write(0);
   TCA_WIRE.endTransmission();
@@ -355,26 +361,27 @@ void loop() {
   midiEventPacket_t rx;
   do {
     rx = MidiUSB.read();
-    if (rx.header == 4 || rx.header == 7 || rx.header == 6 || rx.header == 5) {
-      // USB MIDI: header 4 = BOTH sysex start AND continuation - only reset when we see 0xF0
+    uint8_t cin = rx.header & 0x0F;
+    if (cin >= 4 && cin <= 7) {
+      // USB MIDI sysex: append by Code Index — MUST copy 0x00 data bytes (do not use if(byte2)).
       if (rx.byte1 == 0xF0) {
         sysex_index = 0;
       }
-      // Add to sysex buffer - MUST stay within buffer bounds to prevent crash/restart
       if (sysex_index < SYSEX_BUF_SIZE - 1) {
-        sysex_buf[sysex_index] = rx.byte1;
-        sysex_index++;
+        sysex_buf[sysex_index++] = rx.byte1;
       }
-      if ((sysex_index < SYSEX_BUF_SIZE - 1) && rx.byte2) {
-        sysex_buf[sysex_index] = rx.byte2;
-        sysex_index++;
+      if (cin == 0x04) {
+        if (sysex_index < SYSEX_BUF_SIZE - 1) sysex_buf[sysex_index++] = rx.byte2;
+        if (sysex_index < SYSEX_BUF_SIZE - 1) sysex_buf[sysex_index++] = rx.byte3;
+      } else if (cin == 0x05) {
+        if (sysex_index < SYSEX_BUF_SIZE - 1) sysex_buf[sysex_index++] = rx.byte2;
+      } else if (cin == 0x06) {
+        if (sysex_index < SYSEX_BUF_SIZE - 1) sysex_buf[sysex_index++] = rx.byte2;
+        if (sysex_index < SYSEX_BUF_SIZE - 1) sysex_buf[sysex_index++] = rx.byte3;
       }
-      if ((sysex_index < SYSEX_BUF_SIZE - 1) && rx.byte3) {
-        sysex_buf[sysex_index] = rx.byte3;
-        sysex_index++;
-      }
+      /* cin 0x07: only byte1 (already stored) */
 
-      if (rx.header == 7 || rx.header == 6 || rx.header == 5) {
+      if (cin == 7 || cin == 6 || cin == 5) {
         // Process complete sysex message
         int encoder_num = sysex_buf[1] - 1;
         // Serial.print("# Got sysex of len ");
@@ -389,34 +396,83 @@ void loop() {
         uint16_t val_len = sysex_index;
         sysex_index = 0;
 
-        if (val_len < 5 || sysex_buf[0] != 0xF0) {
+        if (val_len < 4 || sysex_buf[0] != 0xF0) {
           continue;
         }
-        // Sysex format from cubefish: (0xF0, encoder_num, ...chars..., 0xF7)
-        // encoder_num 1-16 = knob displays, 50-57 = bank button labels
+        // Knob (1-16): F0, enc, CUBEFISH_KNOB_SYNC_TAG, midi 0-127 or 128=skip, display..., F7
+        // Legacy knob: F0, enc, display..., F7 (no tag)
+        // Bank labels: F0, 50-57, display..., F7
         if (0 <= encoder_num && encoder_num <= 15) {
-          // Knob display: payload is param name/value string from Ableton device (truncate to fit)
-          uint16_t payload_len = (val_len > 3) ? (val_len - 3) : 0;
-          uint8_t copy_len = (payload_len < DISPLAY_TEXT_LEN - 1) ? payload_len : (DISPLAY_TEXT_LEN - 1);
-          memcpy(display_text[encoder_num], sysex_buf + 2, copy_len);
-          display_text[encoder_num][copy_len] = 0;
-
-          // Parse numeric value for knob sync (e.g. "64", "50 %" from Ableton)
-          int parsed_val = -1;
-          for (int i = 2; i < val_len - 1; i++) {
-            if (sysex_buf[i] >= '0' && sysex_buf[i] <= '9') {
-              parsed_val = 0;
-              while (i < val_len - 1 && sysex_buf[i] >= '0' && sysex_buf[i] <= '9') {
-                parsed_val = parsed_val * 10 + (sysex_buf[i] - '0');
-                if (parsed_val > 127) parsed_val = 127;
-                i++;
-              }
-              break;
+          const uint8_t *disp_src;
+          uint16_t disp_max;
+          if (val_len >= 6 && sysex_buf[2] == CUBEFISH_KNOB_SYNC_TAG) {
+            uint8_t midi_sync = sysex_buf[3];
+            disp_src = sysex_buf + 4;
+            disp_max = (val_len > 5) ? (val_len - 5) : 0; /* excludes F0,enc,tag,midi,F7 */
+            if (midi_sync <= 127) {
+              last_recv_encoder_val[encoder_num] = (int)midi_sync;
+#if LOG_ABLETON_MIDI
+              Serial.print(F("[AB] rx enc="));
+              Serial.print(encoder_num);
+              Serial.print(F(" midi="));
+              Serial.print(midi_sync);
+              Serial.print(F(" sysex_len="));
+              Serial.println(val_len);
+#endif
+            } else {
+#if LOG_ABLETON_MIDI
+              Serial.print(F("[AB] rx enc="));
+              Serial.print(encoder_num);
+              Serial.print(F(" sync=SKIP sysex_len="));
+              Serial.println(val_len);
+#endif
             }
+          } else {
+            /* Legacy: infer sync from display text (fragile) */
+            disp_src = sysex_buf + 2;
+            disp_max = (val_len > 3) ? (val_len - 3) : 0;
+            int parsed_val = -1;
+            int value_start = 2;
+            for (int i = 2; i < val_len - 1; i++) {
+              if (sysex_buf[i] == '\n') {
+                value_start = i + 1;
+                break;
+              }
+            }
+            for (int i = value_start; i < val_len - 1; i++) {
+              if (sysex_buf[i] >= '0' && sysex_buf[i] <= '9') {
+                parsed_val = 0;
+                while (i < val_len - 1 && sysex_buf[i] >= '0' && sysex_buf[i] <= '9') {
+                  parsed_val = parsed_val * 10 + (sysex_buf[i] - '0');
+                  if (parsed_val > 127) parsed_val = 127;
+                  i++;
+                }
+                break;
+              }
+            }
+            if (parsed_val >= 0) {
+              last_recv_encoder_val[encoder_num] = parsed_val;
+#if LOG_ABLETON_MIDI
+              Serial.print(F("[AB] rx LEGACY enc="));
+              Serial.print(encoder_num);
+              Serial.print(F(" parsed="));
+              Serial.print(parsed_val);
+              Serial.print(F(" sysex_len="));
+              Serial.println(val_len);
+#endif
+            }
+#if LOG_ABLETON_MIDI
+            else {
+              Serial.print(F("[AB] rx LEGACY enc="));
+              Serial.print(encoder_num);
+              Serial.print(F(" no_parse sysex_len="));
+              Serial.println(val_len);
+            }
+#endif
           }
-          if (parsed_val >= 0) {
-            last_recv_encoder_val[encoder_num] = parsed_val;
-          }
+          uint8_t copy_len = (disp_max < DISPLAY_TEXT_LEN - 1) ? (uint8_t)disp_max : (DISPLAY_TEXT_LEN - 1);
+          memcpy(display_text[encoder_num], disp_src, copy_len);
+          display_text[encoder_num][copy_len] = 0;
           changed_knobs |= shifter << encoder_num;
         } else if (50 <= encoder_num + 1 && encoder_num + 1 <= 57) {
           uint8_t button_num = encoder_num + 1 - 50;
@@ -528,10 +584,17 @@ void loop() {
   for (int i = 0; i < 16; i++) {
     if (last_recv_encoder_val[i] >= 0 && encoder_wait[i] == 0) {
       encoder_val[i] = last_recv_encoder_val[i];
+#if LOG_ABLETON_MIDI
+      Serial.print(F("[AB] apply enc="));
+      Serial.print(i);
+      Serial.print(F(" val="));
+      Serial.println(encoder_val[i]);
+#else
       Serial.print("Updating encoder ");
       Serial.print(i);
       Serial.print(" to ");
       Serial.println(encoder_val[i]);
+#endif
       last_recv_encoder_val[i] = -1;
     }
   }

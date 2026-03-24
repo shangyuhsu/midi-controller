@@ -18,3 +18,9 @@ __pycache__/
 *.swp
 *.swo
 .DS_Store
+
+# Alias
+ableton_cubefish
+
+# Lib reference
+MIDIRemoteScripts
