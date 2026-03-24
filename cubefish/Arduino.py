@@ -19,12 +19,10 @@ from __future__ import absolute_import, print_function, unicode_literals
 # from _Framework.EncoderElement import EncoderElement
 from ableton.v2.base import liveobj_valid
 from ableton.v3.control_surface import ControlSurface
-from ableton.v3.control_surface.elements import ButtonElement
-from ableton.v3.control_surface.components import DeviceComponent, DeviceBankNavigationComponent
-from ableton.v3.control_surface.controls import ButtonControl, FixedRadioButtonGroup, MappedButtonControl, MappedControl, ToggleButtonControl, control_list
+from ableton.v3.control_surface.components import DeviceComponent
+from .bank_definitions import CUBEFISH_BANK_DEFINITIONS
 from .encoder import CustomEncoderElement
 import Live
-from itertools import zip_longest
 
 # class MyDeviceComponent(DeviceComponent):
 #     parameter_controls = control_list(MappedControl, control_count=16)
@@ -262,8 +260,10 @@ class Elements(ElementsBase):
 
 class MyDeviceComponent(DeviceComponent):
     def __init__(self, send_midi, *a, **k):
-        (super().__init__)(*a, **k)
         self.send_midi = send_midi
+        k = dict(k)
+        k.setdefault("bank_definitions", CUBEFISH_BANK_DEFINITIONS)
+        (super().__init__)(*a, **k)
 
     def _set_device(self, device):
         super()._set_device(device)
@@ -298,27 +298,6 @@ class MyDeviceComponent(DeviceComponent):
         midi_msg = (SYSEX_START, 50 + button_num) + tuple(ord(char) for char in message) + (SYSEX_END,)
         _LOG(f"Bank {button_num}: {message} ({midi_msg})")
         self.send_midi(midi_msg)
-
-NUM_BANK_SELECT_BUTTONS = 8
-from math import ceil
-class BankNav(DeviceBankNavigationComponent):
-    def _notify_bank_name(self):
-        # Each bank select button shows 2 parameter banks; adjust index for display
-        if self._bank_provider:
-            self._bank_provider.index = self._bank_provider.index // 2
-        super()._notify_bank_name()
-
-    def _update_bank_select_buttons(self):
-        bank_index = self._bank_provider.index if self._bank_provider else 0 # ceil((self._bank_provider.index if self._bank_provider else 0) / self._banking_info.num_simultaneous_banks)
-        bank_count = self._bank_provider.bank_count() if self._bank_provider else 0  # self._adjusted_bank_count()
-        _LOG(f"Setting bank select buttons. Index {bank_index} count {bank_count}")
-        if self._should_skip_first_bank():
-            bank_count -= 1
-            bank_index -= 1
-        has_banks = bank_count > 1
-        self.bank_select_buttons.active_control_count = bank_count if has_banks else 0
-        if has_banks:
-            self.bank_select_buttons.checked_index = bank_index if bank_index < NUM_BANK_SELECT_BUTTONS else -1
 
 class Arduino(ControlSurface):
 
