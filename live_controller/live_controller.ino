@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <string.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
@@ -194,6 +195,33 @@ void programChange(byte channel, byte program) {
 
 int encoder_val[NUM_ENCODER] = {0, 5};
 int encoder_state[NUM_ENCODER] = {0};
+
+bool mixer_mode = false;
+int encoder_stored_device[16];
+int encoder_stored_mixer[16];
+
+static void mirror_slot_to_storage(int idx) {
+  if (idx < 0 || idx > 15) return;
+  if (mixer_mode) {
+    encoder_stored_mixer[idx] = encoder_val[idx];
+  } else {
+    encoder_stored_device[idx] = encoder_val[idx];
+  }
+}
+
+static void send_slot_cc(uint8_t slot, int value) {
+  if (slot > 15) return;
+  uint8_t cc;
+  if (!mixer_mode) {
+    cc = CC_DEVICE_ENC0 + slot;
+  } else if (slot < 8) {
+    cc = CC_MIX_VOL0 + slot;
+  } else {
+    cc = CC_MIX_PAN0 + (slot - 8);
+  }
+  controlChange(MIDI_CH_CUBEFISH, cc, (uint8_t)value);
+}
+
 uint32_t g_enc_switch_state = 0;
 uint32_t g_enc_switch_up = 0;
 uint32_t g_enc_switch_down = 0;
@@ -521,7 +549,27 @@ void loop() {
     bool sw_up = g_enc_switch_up & (shifter << idx);
     if (incr || sw_down || sw_up) {
       if (idx == 16) {
-        if (incr && num_inactive_global_incr == 10) {
+        if (sw_down) {
+          if (mixer_mode) {
+            memcpy(encoder_stored_mixer, encoder_val, sizeof(int) * 16);
+            memcpy(encoder_val, encoder_stored_device, sizeof(int) * 16);
+            mixer_mode = false;
+          } else {
+            memcpy(encoder_stored_device, encoder_val, sizeof(int) * 16);
+            memcpy(encoder_val, encoder_stored_mixer, sizeof(int) * 16);
+            mixer_mode = true;
+          }
+          in_ctrl = false;
+          for (int j = 0; j < 16; j++) {
+            last_recv_encoder_val[j] = -1;
+          }
+          changed_knobs |= 0xFFFFu;
+          controlChange(MIDI_CH_CUBEFISH, CC_MIX_MODE_TOGGLE, 127);
+          for (int s = 0; s < 16; s++) {
+            send_slot_cc((uint8_t)s, encoder_val[s]);
+          }
+        }
+        if (!mixer_mode && incr && num_inactive_global_incr == 10) {
           // toggle bank and layer
           Serial.println("Toggling prev layer");
           uint8_t new_ch = get_prev_layer();
@@ -554,8 +602,8 @@ void loop() {
         encoder_val[idx] = 127;
       }
 
-      // Toggle between 0 and 127
-      if (sw_down) {
+      // Toggle between 0 and 127 (device mode only; mixer uses continuous volume/pan)
+      if (!mixer_mode && sw_down) {
         if (encoder_val[idx] < 64) {
           encoder_val[idx] = 127;
         } else {
@@ -567,8 +615,8 @@ void loop() {
       // Serial.println(idx);
       encoder_wait[idx] = 300000;
       changed_knobs |= shifter << idx;
-      // CC 20-35 on channel 15 for device parameters
-      controlChange(15, 20 + idx, encoder_val[idx]);
+      mirror_slot_to_storage(idx);
+      send_slot_cc((uint8_t)idx, encoder_val[idx]);
     }
   }
 
@@ -596,6 +644,7 @@ void loop() {
       Serial.println(encoder_val[i]);
 #endif
       last_recv_encoder_val[i] = -1;
+      mirror_slot_to_storage(i);
     }
   }
 
@@ -614,7 +663,8 @@ void loop() {
   //   selected_button = 0;
   // }
 
-  // Button events
+  // Button events (bank / layer UI — not used while in mixer mode)
+  if (!mixer_mode)
   for (uint8_t button_num = 0; button_num < 9; button_num++) {
     uint8_t switch_idx;
     if (button_num == 8) { // Ctrl
@@ -941,5 +991,10 @@ void setup() {
 
   for (uint8_t i = 0; i < 4; i++) {
     update_button_display(i, 0);
+  }
+
+  for (int i = 0; i < 16; i++) {
+    encoder_stored_device[i] = encoder_val[i];
+    encoder_stored_mixer[i] = (i < 8) ? 100 : 64;
   }
 }

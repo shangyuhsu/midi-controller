@@ -2,6 +2,13 @@
 /* MIDI */
 #define ENABLE_MIDI 1
 
+/* Cubefish + Live (cubefish/Arduino.py): channel 15 */
+#define MIDI_CH_CUBEFISH 15
+#define CC_DEVICE_ENC0 20
+#define CC_MIX_VOL0 40
+#define CC_MIX_PAN0 48
+#define CC_MIX_MODE_TOGGLE 119
+
 /* Encoder/Button */
 #define NUM_ENCODER 17
 #define NUM_SWITCH 26

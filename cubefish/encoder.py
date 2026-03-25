@@ -9,6 +9,22 @@ SYSEX_NO_POSITION_SYNC = 128
 KNOB_SYSEX_SYNC_TAG = 0x01
 
 CC_STATUS = 176
+
+
+def _track_for_mixer_parameter(song, param):
+    if not liveobj_valid(song) or not liveobj_valid(param):
+        return None
+    for track in song.tracks:
+        if not liveobj_valid(track):
+            continue
+        md = track.mixer_device
+        if not liveobj_valid(md):
+            continue
+        if md.volume == param or md.panning == param:
+            return track
+    return None
+
+
 class CustomEncoderElement(EncoderElementBase):
 
     def __init__(self, encoder_num, *a, **k):
@@ -85,6 +101,45 @@ class CustomEncoderElement(EncoderElementBase):
     def _parameter_value_changed(self):
         super()._parameter_value_changed()
         # _LOG("PARAM VAL CHANGED")
+
+
+class MixerStripEncoderElement(CustomEncoderElement):
+
+    def __init__(self, encoder_num, song_getter, identifier, *a, **k):
+        self._song_getter = song_getter
+        (super().__init__)(encoder_num, identifier, *a, **k)
+
+    def _send_parameter_feedback(self):
+        song = self._song_getter() if self._song_getter else None
+        param = self.mapped_object
+        track = _track_for_mixer_parameter(song, param)
+        name = ""
+        if track is not None:
+            name = (track.name or "")[:18]
+        if not name:
+            name = self.parameter_name or ""
+        value_str = self.parameter_value or ""
+        if value_str.startswith("1 A "):
+            value_str = value_str[4:]
+        elif value_str.startswith("1 B "):
+            value_str = value_str[4:]
+        elif value_str.startswith("1 "):
+            value_str = value_str[2:]
+        val = f"{name}\n{value_str}".strip("\n") if name or value_str else ""
+        if liveobj_valid(self.mapped_object):
+            midi_sync = parameter_value_to_midi_value(
+                self.mapped_object, max_value=(self._max_value))
+        else:
+            midi_sync = SYSEX_NO_POSITION_SYNC
+        midi_msg = (
+            SYSEX_START,
+            self.encoder_num,
+            KNOB_SYSEX_SYNC_TAG,
+            midi_sync,
+        ) + tuple(ord(char) for char in val) + (SYSEX_END,)
+        self._send_message(midi_msg)
+
+
 # class RealigningEncoderElement(EncoderElement):
 
 #     def __init__(self, *a, **k):

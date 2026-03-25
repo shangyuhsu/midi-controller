@@ -19,10 +19,15 @@ from __future__ import absolute_import, print_function, unicode_literals
 # from _Framework.EncoderElement import EncoderElement
 from ableton.v2.base import liveobj_valid
 from ableton.v3.control_surface import ControlSurface
-from ableton.v3.control_surface.components import DeviceComponent
+from ableton.v3.control_surface.components import DeviceComponent, MixerComponent, SessionRingComponent
 from .bank_definitions import CUBEFISH_BANK_DEFINITIONS
-from .encoder import CustomEncoderElement
+from .encoder import CustomEncoderElement, MixerStripEncoderElement
 import Live
+
+MIDI_CH_CUBEFISH = 15
+CC_DEVICE_ENC0 = 20
+CC_MIX_VOL0 = 40
+CC_MIX_PAN0 = 48
 
 # class MyDeviceComponent(DeviceComponent):
 #     parameter_controls = control_list(MappedControl, control_count=16)
@@ -257,6 +262,7 @@ class Elements(ElementsBase):
         (super().__init__)(*a, **k)
         for idx in range(8):
             self.add_button(50 + idx, f"bank_{idx}", channel=2, is_momentary=False)
+        self.add_button(119, "mixer_mode_toggle", channel=MIDI_CH_CUBEFISH, is_momentary=True)
 
 class MyDeviceComponent(DeviceComponent):
     def __init__(self, send_midi, *a, **k):
@@ -373,17 +379,85 @@ class Arduino(ControlSurface):
             # self.set_device_component(self._device)
 
     def setup(self):
-        # mixer = MixerComponent()
-        # mixer.master_strip.volume_control.set_control_element(CustomEncoderElement(encoder_num=1, identifier=20, channel=1, is_feedback_enabled=True))
-        # mixer.set_enabled(True)
-
-        self._device = MyDeviceComponent(send_midi=self._send_midi, bank_size=16) # layer=layer, is_enabled=False)
+        self._mixer_mode = False
+        self._device = MyDeviceComponent(send_midi=self._send_midi, bank_size=16)
         self._device._banking_info._num_simultaneous_banks = 1
-        # self._device.set_bank_nav_buttons(Pad(0, 123), Pad(0, 124))
         self._device._bank_navigation_component.set_bank_select_buttons([getattr(self.elements, f"bank_{idx}") for idx in range(8)])
-        # self._device._bank_navigation_component.set_next_bank_button(self.elements.next_bank)
-        # self._device.set_on_off_button(Pad(0, 127))
-        # Encoders listen for CC 20-35 on channel 15 to match controller
-        self._device.set_parameter_controls(tuple([CustomEncoderElement(encoder_num=idx + 1, identifier=20 + idx, channel=15, is_feedback_enabled=True) for idx in range(16)]))
+
+        self._device_encoders = tuple(
+            CustomEncoderElement(
+                encoder_num=idx + 1,
+                identifier=CC_DEVICE_ENC0 + idx,
+                channel=MIDI_CH_CUBEFISH,
+                is_feedback_enabled=True,
+            )
+            for idx in range(16)
+        )
+        self._device.set_parameter_controls(self._device_encoders)
+
+        song_getter = lambda: self.song
+        self._mixer_vol_encoders = tuple(
+            MixerStripEncoderElement(
+                encoder_num=idx + 1,
+                song_getter=song_getter,
+                identifier=CC_MIX_VOL0 + idx,
+                channel=MIDI_CH_CUBEFISH,
+                is_feedback_enabled=True,
+            )
+            for idx in range(8)
+        )
+        self._mixer_pan_encoders = tuple(
+            MixerStripEncoderElement(
+                encoder_num=idx + 1,
+                song_getter=song_getter,
+                identifier=CC_MIX_PAN0 + (idx - 8),
+                channel=MIDI_CH_CUBEFISH,
+                is_feedback_enabled=True,
+            )
+            for idx in range(8, 16)
+        )
+
+        with self.component_guard():
+            self._mixer_ring = SessionRingComponent(
+                name="CubefishMixerRing",
+                num_tracks=8,
+                num_scenes=0,
+                is_private=True,
+            )
+            self._mixer = MixerComponent(
+                name="CubefishMixer",
+                session_ring=self._mixer_ring,
+                target_track=self._target_track,
+                is_enabled=False,
+            )
+            self._mixer.set_volume_controls(self._mixer_vol_encoders)
+            self._mixer.set_pan_controls(self._mixer_pan_encoders)
+            self._mixer_ring.set_enabled(True)
+
         self._device.set_enabled(True)
-        # self.set_device_component(self._device)
+        self.elements.mixer_mode_toggle.add_value_listener(self._on_mixer_mode_toggle_value)
+
+    def _on_mixer_mode_toggle_value(self, value):
+        if not value:
+            return
+        self._mixer_mode = not self._mixer_mode
+        with self.component_guard():
+            if self._mixer_mode:
+                self._device.set_enabled(False)
+                self._mixer.set_enabled(True)
+            else:
+                self._mixer.set_enabled(False)
+                self._device.set_enabled(True)
+        self.schedule_message(1, self._cubefish_refresh_active_feedback)
+
+    def _cubefish_refresh_active_feedback(self):
+        if self._mixer_mode:
+            for enc in self._mixer_vol_encoders + self._mixer_pan_encoders:
+                enc.clear_send_cache()
+                enc.notify_parameter_name()
+                enc.notify_parameter_value()
+        else:
+            for enc in self._device_encoders:
+                enc.clear_send_cache()
+                enc.notify_parameter_name()
+                enc.notify_parameter_value()
