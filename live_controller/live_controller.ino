@@ -825,7 +825,7 @@ void scan_encoders_and_buttons() {
       digitalWrite(S1_B, mux_ch & 0b10);
       digitalWrite(S2_B, mux_ch & 0b100);
       digitalWrite(S3_B, mux_ch & 0b1000);
-      delayMicroseconds(3);
+      delayMicroseconds(5);
 
       // uint8_t mux_vals[5] = {
       //   (pinb >> 4) & 1, // L1
