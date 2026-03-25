@@ -26,7 +26,8 @@ Adafruit_SSD1306* cur_display = NULL;
 long startTime, endTime, elapsedTime;
 uint8_t cur_channel = 1;
 uint8_t selected_button = 0;
-char display_text[16][DISPLAY_TEXT_LEN] = {0};
+char display_text_device[16][DISPLAY_TEXT_LEN] = {0};
+char display_text_mixer[16][DISPLAY_TEXT_LEN] = {0};
 
 char button_text[8][DISPLAY_TEXT_LEN] = {0};
 void scan_isr();
@@ -411,37 +412,54 @@ void loop() {
 
       if (cin == 7 || cin == 6 || cin == 5) {
         // Process complete sysex message
-        int encoder_num = sysex_buf[1] - 1;
-        // Serial.print("# Got sysex of len ");
-        // Serial.println(sysex_index - 2);
-        // for (int i = 2; i < sysex_index - 1; i++) {
-        //   Serial.print((char)sysex_buf[i]);
-        // }
-        // Serial.println("");
+        uint8_t sid = sysex_buf[1];
 
         sysex_buf[sysex_index] = 0;
-        // sysex_buf[DISPLAY_TEXT_LEN - 1] = 0;
         uint16_t val_len = sysex_index;
         sysex_index = 0;
 
         if (val_len < 4 || sysex_buf[0] != 0xF0) {
           continue;
         }
-        // Knob (1-16): F0, enc, CUBEFISH_KNOB_SYNC_TAG, midi 0-127 or 128=skip, display..., F7
-        // Legacy knob: F0, enc, display..., F7 (no tag)
+        // Device knob: F0, 1-16, TAG, midi, text..., F7  -> display_text_device
+        // Mixer knob: F0, 17-32, TAG, midi, text..., F7 -> display_text_mixer
+        // Legacy knob: F0, slot, text... (no tag) — only for device IDs 1-16
         // Bank labels: F0, 50-57, display..., F7
-        if (0 <= encoder_num && encoder_num <= 15) {
+        int knob_slot = -1;
+        bool knob_is_mixer = false;
+        if (sid >= SYSEX_ENC_DEVICE_LO && sid <= SYSEX_ENC_DEVICE_HI) {
+          knob_slot = (int)sid - SYSEX_ENC_DEVICE_LO;
+          knob_is_mixer = false;
+        } else if (sid >= SYSEX_ENC_MIXER_LO && sid <= SYSEX_ENC_MIXER_HI) {
+          knob_slot = (int)sid - SYSEX_ENC_MIXER_LO;
+          knob_is_mixer = true;
+        }
+
+        if (knob_slot >= 0) {
+          char *disp_dest = knob_is_mixer ? display_text_mixer[knob_slot] : display_text_device[knob_slot];
           const uint8_t *disp_src;
           uint16_t disp_max;
           if (val_len >= 6 && sysex_buf[2] == CUBEFISH_KNOB_SYNC_TAG) {
             uint8_t midi_sync = sysex_buf[3];
             disp_src = sysex_buf + 4;
-            disp_max = (val_len > 5) ? (val_len - 5) : 0; /* excludes F0,enc,tag,midi,F7 */
+            disp_max = (val_len > 5) ? (val_len - 5) : 0;
             if (midi_sync <= 127) {
-              last_recv_encoder_val[encoder_num] = (int)midi_sync;
+              if (knob_is_mixer) {
+                encoder_stored_mixer[knob_slot] = (int)midi_sync;
+                if (mixer_mode) {
+                  last_recv_encoder_val[knob_slot] = (int)midi_sync;
+                }
+              } else {
+                encoder_stored_device[knob_slot] = (int)midi_sync;
+                if (!mixer_mode) {
+                  last_recv_encoder_val[knob_slot] = (int)midi_sync;
+                }
+              }
 #if LOG_ABLETON_MIDI
-              Serial.print(F("[AB] rx enc="));
-              Serial.print(encoder_num);
+              Serial.print(F("[AB] rx "));
+              Serial.print(knob_is_mixer ? F("mix") : F("dev"));
+              Serial.print(F(" slot="));
+              Serial.print(knob_slot);
               Serial.print(F(" midi="));
               Serial.print(midi_sync);
               Serial.print(F(" sysex_len="));
@@ -449,14 +467,16 @@ void loop() {
 #endif
             } else {
 #if LOG_ABLETON_MIDI
-              Serial.print(F("[AB] rx enc="));
-              Serial.print(encoder_num);
+              Serial.print(F("[AB] rx "));
+              Serial.print(knob_is_mixer ? F("mix") : F("dev"));
+              Serial.print(F(" slot="));
+              Serial.print(knob_slot);
               Serial.print(F(" sync=SKIP sysex_len="));
               Serial.println(val_len);
 #endif
             }
           } else {
-            /* Legacy: infer sync from display text (fragile) */
+            /* Legacy: infer sync from display text (device IDs only in practice) */
             disp_src = sysex_buf + 2;
             disp_max = (val_len > 3) ? (val_len - 3) : 0;
             int parsed_val = -1;
@@ -479,10 +499,22 @@ void loop() {
               }
             }
             if (parsed_val >= 0) {
-              last_recv_encoder_val[encoder_num] = parsed_val;
+              if (knob_is_mixer) {
+                encoder_stored_mixer[knob_slot] = parsed_val;
+                if (mixer_mode) {
+                  last_recv_encoder_val[knob_slot] = parsed_val;
+                }
+              } else {
+                encoder_stored_device[knob_slot] = parsed_val;
+                if (!mixer_mode) {
+                  last_recv_encoder_val[knob_slot] = parsed_val;
+                }
+              }
 #if LOG_ABLETON_MIDI
-              Serial.print(F("[AB] rx LEGACY enc="));
-              Serial.print(encoder_num);
+              Serial.print(F("[AB] rx LEGACY "));
+              Serial.print(knob_is_mixer ? F("mix") : F("dev"));
+              Serial.print(F(" slot="));
+              Serial.print(knob_slot);
               Serial.print(F(" parsed="));
               Serial.print(parsed_val);
               Serial.print(F(" sysex_len="));
@@ -491,19 +523,23 @@ void loop() {
             }
 #if LOG_ABLETON_MIDI
             else {
-              Serial.print(F("[AB] rx LEGACY enc="));
-              Serial.print(encoder_num);
+              Serial.print(F("[AB] rx LEGACY "));
+              Serial.print(knob_is_mixer ? F("mix") : F("dev"));
+              Serial.print(F(" slot="));
+              Serial.print(knob_slot);
               Serial.print(F(" no_parse sysex_len="));
               Serial.println(val_len);
             }
 #endif
           }
           uint8_t copy_len = (disp_max < DISPLAY_TEXT_LEN - 1) ? (uint8_t)disp_max : (DISPLAY_TEXT_LEN - 1);
-          memcpy(display_text[encoder_num], disp_src, copy_len);
-          display_text[encoder_num][copy_len] = 0;
-          changed_knobs |= shifter << encoder_num;
-        } else if (50 <= encoder_num + 1 && encoder_num + 1 <= 57) {
-          uint8_t button_num = encoder_num + 1 - 50;
+          memcpy(disp_dest, disp_src, copy_len);
+          disp_dest[copy_len] = 0;
+          if (knob_is_mixer == mixer_mode) {
+            changed_knobs |= (uint32_t)shifter << knob_slot;
+          }
+        } else if (50 <= sid && sid <= 57) {
+          uint8_t button_num = sid - 50;
           uint16_t payload_len = (val_len > 3) ? (val_len - 3) : 0;
           uint8_t copy_len = (payload_len < DISPLAY_TEXT_LEN - 1) ? payload_len : (DISPLAY_TEXT_LEN - 1);
           memcpy(button_text[button_num], sysex_buf + 2, copy_len);
@@ -564,10 +600,6 @@ void loop() {
             last_recv_encoder_val[j] = -1;
           }
           changed_knobs |= 0xFFFFu;
-          controlChange(MIDI_CH_CUBEFISH, CC_MIX_MODE_TOGGLE, 127);
-          for (int s = 0; s < 16; s++) {
-            send_slot_cc((uint8_t)s, encoder_val[s]);
-          }
         }
         if (!mixer_mode && incr && num_inactive_global_incr == 10) {
           // toggle bank and layer
@@ -749,12 +781,13 @@ void update_encoder_display(int encoder_num) {
   cur_display->setTextSize(1);
   cur_display->setCursor(0, 0);
 
-  if (display_text[encoder_num][0] == 10 || display_text[encoder_num][0] == 32) {
+  const char *line = mixer_mode ? display_text_mixer[encoder_num] : display_text_device[encoder_num];
+  if (line[0] == 10 || line[0] == 32) {
     cur_display->display();
     return;
   }
 
-  cur_display->println(display_text[encoder_num]);
+  cur_display->println(line);
 
   // Value visual (knob)
   if (encoder_num % 2 == 0 && 0) {

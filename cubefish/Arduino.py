@@ -262,7 +262,6 @@ class Elements(ElementsBase):
         (super().__init__)(*a, **k)
         for idx in range(8):
             self.add_button(50 + idx, f"bank_{idx}", channel=2, is_momentary=False)
-        self.add_button(119, "mixer_mode_toggle", channel=MIDI_CH_CUBEFISH, is_momentary=True)
 
 class MyDeviceComponent(DeviceComponent):
     def __init__(self, send_midi, *a, **k):
@@ -379,7 +378,6 @@ class Arduino(ControlSurface):
             # self.set_device_component(self._device)
 
     def setup(self):
-        self._mixer_mode = False
         self._device = MyDeviceComponent(send_midi=self._send_midi, bank_size=16)
         self._device._banking_info._num_simultaneous_banks = 1
         self._device._bank_navigation_component.set_bank_select_buttons([getattr(self.elements, f"bank_{idx}") for idx in range(8)])
@@ -434,30 +432,7 @@ class Arduino(ControlSurface):
             self._mixer.set_pan_controls(self._mixer_pan_encoders)
             self._mixer_ring.set_enabled(True)
 
+        # Mode (device vs mixer CC routing) lives only on the controller. Device uses CC 20–35,
+        # mixer uses CC 40–55 on the same channel; both mappings stay active in Live.
         self._device.set_enabled(True)
-        self.elements.mixer_mode_toggle.add_value_listener(self._on_mixer_mode_toggle_value)
-
-    def _on_mixer_mode_toggle_value(self, value):
-        if not value:
-            return
-        self._mixer_mode = not self._mixer_mode
-        with self.component_guard():
-            if self._mixer_mode:
-                self._device.set_enabled(False)
-                self._mixer.set_enabled(True)
-            else:
-                self._mixer.set_enabled(False)
-                self._device.set_enabled(True)
-        self.schedule_message(1, self._cubefish_refresh_active_feedback)
-
-    def _cubefish_refresh_active_feedback(self):
-        if self._mixer_mode:
-            for enc in self._mixer_vol_encoders + self._mixer_pan_encoders:
-                enc.clear_send_cache()
-                enc.notify_parameter_name()
-                enc.notify_parameter_value()
-        else:
-            for enc in self._device_encoders:
-                enc.clear_send_cache()
-                enc.notify_parameter_name()
-                enc.notify_parameter_value()
+        self._mixer.set_enabled(True)

@@ -7,6 +7,8 @@ SYSEX_END = 0xF7
 SYSEX_NO_POSITION_SYNC = 128
 # Must match live_controller.ino CUBEFISH_KNOB_SYNC_TAG
 KNOB_SYSEX_SYNC_TAG = 0x01
+# Second SysEx data byte: device 1–16, mixer 17–32 (same physical knob index 1–16)
+MIXER_SYSEX_SLOT_OFFSET = 16
 
 CC_STATUS = 176
 
@@ -131,9 +133,10 @@ class MixerStripEncoderElement(CustomEncoderElement):
                 self.mapped_object, max_value=(self._max_value))
         else:
             midi_sync = SYSEX_NO_POSITION_SYNC
+        sysex_slot = self.encoder_num + MIXER_SYSEX_SLOT_OFFSET
         midi_msg = (
             SYSEX_START,
-            self.encoder_num,
+            sysex_slot,
             KNOB_SYSEX_SYNC_TAG,
             midi_sync,
         ) + tuple(ord(char) for char in val) + (SYSEX_END,)

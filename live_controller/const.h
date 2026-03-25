@@ -7,7 +7,11 @@
 #define CC_DEVICE_ENC0 20
 #define CC_MIX_VOL0 40
 #define CC_MIX_PAN0 48
-#define CC_MIX_MODE_TOGGLE 119
+/* Knob SysEx (after F0): 1–16 = device OLED/slot, 17–32 = mixer (slot = byte − 17). Must match cubefish/encoder.py */
+#define SYSEX_ENC_DEVICE_LO 1
+#define SYSEX_ENC_DEVICE_HI 16
+#define SYSEX_ENC_MIXER_LO 17
+#define SYSEX_ENC_MIXER_HI 32
 
 /* Encoder/Button */
 #define NUM_ENCODER 17
