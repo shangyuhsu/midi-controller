@@ -24,3 +24,6 @@ ableton_cubefish
 
 # Lib reference
 MIDIRemoteScripts
+
+# Workspace
+*.code-workspace
