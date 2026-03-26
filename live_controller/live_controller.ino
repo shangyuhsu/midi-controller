@@ -592,12 +592,8 @@ void loop() {
     num_inactive_global_incr += 1;
   }
 
-  // Encoder displays
-  for (int idx = 0; idx < 16; idx++) {
-    if ((changed_knobs >> idx) & 1) {
-      update_encoder_display(idx);
-    }
-  }
+  // NOTE: encoder display refresh is at the end of the loop so that mode
+  // toggles set by the button section (below) are visible this same iteration.
 
   // if (changed_buttons) {
   //   selected_button = 0;
@@ -643,6 +639,14 @@ void loop() {
         layer_to_selected_bank[cur_channel - 1] = selected_button;
         set_last_two_layers(cur_channel);
       }
+    }
+  }
+
+  // Encoder displays — placed after button section so clip/mixer mode toggles
+  // (which set changed_knobs |= 0xFFFFu) are reflected this same iteration.
+  for (int idx = 0; idx < 16; idx++) {
+    if ((changed_knobs >> idx) & 1) {
+      update_encoder_display(idx);
     }
   }
 
