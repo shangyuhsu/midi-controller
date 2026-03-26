@@ -28,6 +28,7 @@ uint8_t cur_channel = 1;
 uint8_t selected_button = 0;
 char display_text_device[16][DISPLAY_TEXT_LEN] = {0};
 char display_text_mixer[16][DISPLAY_TEXT_LEN] = {0};
+char display_text_clip[16][DISPLAY_TEXT_LEN]   = {0};
 
 char button_text[8][DISPLAY_TEXT_LEN] = {0};
 void scan_isr();
@@ -198,28 +199,25 @@ int encoder_val[NUM_ENCODER] = {0, 5};
 int encoder_state[NUM_ENCODER] = {0};
 
 bool mixer_mode = false;
+bool clip_mode   = false;
 int encoder_stored_device[16];
 int encoder_stored_mixer[16];
+int encoder_stored_clip[16];
 
 static void mirror_slot_to_storage(int idx) {
   if (idx < 0 || idx > 15) return;
-  if (mixer_mode) {
-    encoder_stored_mixer[idx] = encoder_val[idx];
-  } else {
-    encoder_stored_device[idx] = encoder_val[idx];
-  }
+  if (clip_mode)        encoder_stored_clip[idx]   = encoder_val[idx];
+  else if (mixer_mode)  encoder_stored_mixer[idx]  = encoder_val[idx];
+  else                  encoder_stored_device[idx] = encoder_val[idx];
 }
 
 static void send_slot_cc(uint8_t slot, int value) {
   if (slot > 15) return;
   uint8_t cc;
-  if (!mixer_mode) {
-    cc = CC_DEVICE_ENC0 + slot;
-  } else if (slot < 8) {
-    cc = CC_MIX_VOL0 + slot;
-  } else {
-    cc = CC_MIX_PAN0 + (slot - 8);
-  }
+  if (clip_mode)         cc = CC_CLIP_ENC0 + slot;
+  else if (!mixer_mode)  cc = CC_DEVICE_ENC0 + slot;
+  else if (slot < 8)     cc = CC_MIX_VOL0 + slot;
+  else                   cc = CC_MIX_PAN0 + (slot - 8);
   controlChange(MIDI_CH_CUBEFISH, cc, (uint8_t)value);
 }
 
@@ -232,7 +230,6 @@ int textWidth(String text) {
     return text.length() * 6; // Rough approximation, 6 pixels per character
 }
 
-bool in_ctrl = false;
 
 
 uint8_t last_two_layers[2] = {0}; // index 0 = oldest
@@ -323,60 +320,20 @@ void update_button_display(uint8_t button_display_num, uint32_t switch_state) {
     //   cur_display->setCursor(0, 0);
     //   cur_display->fillRect(0, 0, 63, 32, 1);
     // }
-    if (in_ctrl) {
-        cur_display->setCursor(0, 16);
-        cur_display->setTextSize(1);
+    cur_display->setCursor(0, 0);
+    cur_display->setTextSize(1);
 
-        // if (l_on) {
-        //   cur_display->fillRect(0, 0, 64, 32, 1);
-        // } else {
-
-          if (left_idx <= 3) {
-
-            String left_str = channel_names[left_idx];
-            if (left_idx + 1 == cur_channel || l_on) {
-              left_str += " [*]";
-            }
-            write(cur_display, left_str, 0, 16, 61);
-          } else {
-            write(cur_display, String(""), 0, 16, 61);
-          }
-        // }
-
-
-        cur_display->setCursor(0, 16);
-        cur_display->setTextSize(1);
-        // if (r_on) {
-        //   cur_display->fillRect(64, 0, 64, 32, 1);
-        // } else {
-          if (right_idx <= 3) {
-            String right_str = channel_names[right_idx];
-            if (right_idx + 1 == cur_channel || r_on) {
-              right_str += " [*]";
-            }
-            write(cur_display, right_str, 67, 16, 61);
-          } else {
-            write(cur_display, String(""), 67, 16, 61);
-          }
-        // }
-
-    } else {
-      // Use script-provided bank names (e.g. Reverb, Delay) when available, else fallback to hardcoded
-      cur_display->setCursor(0, 0);
-      cur_display->setTextSize(1);
-
-      String left_str = (left[0]) ? String(left) : "";
-      if (selected_button == left_idx) {
-        left_str += " [*]";
-      }
-      write(cur_display, left_str, 0, 0, 61);
-
-      String right_str = (right[0]) ? String(right) : "";
-      if (selected_button == right_idx) {
-        right_str += " [*]";
-      }
-      write(cur_display, right_str, 67, 0, 61);
+    String left_str = (left[0]) ? String(left) : "";
+    if (selected_button == left_idx) {
+      left_str += " [*]";
     }
+    write(cur_display, left_str, 0, 0, 61);
+
+    String right_str = (right[0]) ? String(right) : "";
+    if (selected_button == right_idx) {
+      right_str += " [*]";
+    }
+    write(cur_display, right_str, 67, 0, 61);
 
     cur_display->display();
 }
@@ -425,18 +382,23 @@ void loop() {
         // Mixer knob: F0, 17-32, TAG, midi, text..., F7 -> display_text_mixer
         // Legacy knob: F0, slot, text... (no tag) — only for device IDs 1-16
         // Bank labels: F0, 50-57, display..., F7
+        // 0=device, 1=mixer, 2=clip; -1=not a knob slot
         int knob_slot = -1;
-        bool knob_is_mixer = false;
-        if (sid >= SYSEX_ENC_DEVICE_LO && sid <= SYSEX_ENC_DEVICE_HI) {
-          knob_slot = (int)sid - SYSEX_ENC_DEVICE_LO;
-          knob_is_mixer = false;
-        } else if (sid >= SYSEX_ENC_MIXER_LO && sid <= SYSEX_ENC_MIXER_HI) {
-          knob_slot = (int)sid - SYSEX_ENC_MIXER_LO;
-          knob_is_mixer = true;
-        }
+        int8_t knob_mode = -1;
+        if      (sid >= SYSEX_ENC_DEVICE_LO && sid <= SYSEX_ENC_DEVICE_HI) { knob_slot = sid - SYSEX_ENC_DEVICE_LO; knob_mode = 0; }
+        else if (sid >= SYSEX_ENC_MIXER_LO  && sid <= SYSEX_ENC_MIXER_HI)  { knob_slot = sid - SYSEX_ENC_MIXER_LO;  knob_mode = 1; }
+        else if (sid >= SYSEX_ENC_CLIP_LO   && sid <= SYSEX_ENC_CLIP_HI)   { knob_slot = sid - SYSEX_ENC_CLIP_LO;   knob_mode = 2; }
 
-        if (knob_slot >= 0) {
-          char *disp_dest = knob_is_mixer ? display_text_mixer[knob_slot] : display_text_device[knob_slot];
+        int8_t cur_mode = clip_mode ? 2 : (mixer_mode ? 1 : 0);
+        bool is_active = (knob_mode == cur_mode);
+
+        if (knob_slot >= 0 && knob_mode >= 0) {
+          char    *disp_dest;
+          int     *stored;
+          if      (knob_mode == 2) { disp_dest = display_text_clip[knob_slot];   stored = encoder_stored_clip; }
+          else if (knob_mode == 1) { disp_dest = display_text_mixer[knob_slot];  stored = encoder_stored_mixer; }
+          else                     { disp_dest = display_text_device[knob_slot]; stored = encoder_stored_device; }
+
           const uint8_t *disp_src;
           uint16_t disp_max;
           if (val_len >= 6 && sysex_buf[2] == CUBEFISH_KNOB_SYNC_TAG) {
@@ -444,48 +406,23 @@ void loop() {
             disp_src = sysex_buf + 4;
             disp_max = (val_len > 5) ? (val_len - 5) : 0;
             if (midi_sync <= 127) {
-              if (knob_is_mixer) {
-                encoder_stored_mixer[knob_slot] = (int)midi_sync;
-                if (mixer_mode) {
-                  last_recv_encoder_val[knob_slot] = (int)midi_sync;
-                }
-              } else {
-                encoder_stored_device[knob_slot] = (int)midi_sync;
-                if (!mixer_mode) {
-                  last_recv_encoder_val[knob_slot] = (int)midi_sync;
-                }
-              }
+              stored[knob_slot] = (int)midi_sync;
+              if (is_active) last_recv_encoder_val[knob_slot] = (int)midi_sync;
 #if LOG_ABLETON_MIDI
-              Serial.print(F("[AB] rx "));
-              Serial.print(knob_is_mixer ? F("mix") : F("dev"));
-              Serial.print(F(" slot="));
-              Serial.print(knob_slot);
-              Serial.print(F(" midi="));
-              Serial.print(midi_sync);
-              Serial.print(F(" sysex_len="));
-              Serial.println(val_len);
-#endif
-            } else {
-#if LOG_ABLETON_MIDI
-              Serial.print(F("[AB] rx "));
-              Serial.print(knob_is_mixer ? F("mix") : F("dev"));
-              Serial.print(F(" slot="));
-              Serial.print(knob_slot);
-              Serial.print(F(" sync=SKIP sysex_len="));
-              Serial.println(val_len);
+              const char *lbl = (knob_mode==2) ? "clip" : (knob_mode==1) ? "mix" : "dev";
+              Serial.print(F("[AB] rx ")); Serial.print(lbl);
+              Serial.print(F(" slot=")); Serial.print(knob_slot);
+              Serial.print(F(" midi=")); Serial.println(midi_sync);
 #endif
             }
           } else {
-            /* Legacy: infer sync from display text (device IDs only in practice) */
+            /* Legacy: infer sync from display text */
             disp_src = sysex_buf + 2;
             disp_max = (val_len > 3) ? (val_len - 3) : 0;
             int parsed_val = -1;
             int value_start = 2;
             for (int i = 2; i < val_len - 1; i++) {
-              if (sysex_buf[i] == '\n') {
-                value_start = i + 1;
-                break;
-              }
+              if (sysex_buf[i] == '\n') { value_start = i + 1; break; }
             }
             for (int i = value_start; i < val_len - 1; i++) {
               if (sysex_buf[i] >= '0' && sysex_buf[i] <= '9') {
@@ -499,45 +436,14 @@ void loop() {
               }
             }
             if (parsed_val >= 0) {
-              if (knob_is_mixer) {
-                encoder_stored_mixer[knob_slot] = parsed_val;
-                if (mixer_mode) {
-                  last_recv_encoder_val[knob_slot] = parsed_val;
-                }
-              } else {
-                encoder_stored_device[knob_slot] = parsed_val;
-                if (!mixer_mode) {
-                  last_recv_encoder_val[knob_slot] = parsed_val;
-                }
-              }
-#if LOG_ABLETON_MIDI
-              Serial.print(F("[AB] rx LEGACY "));
-              Serial.print(knob_is_mixer ? F("mix") : F("dev"));
-              Serial.print(F(" slot="));
-              Serial.print(knob_slot);
-              Serial.print(F(" parsed="));
-              Serial.print(parsed_val);
-              Serial.print(F(" sysex_len="));
-              Serial.println(val_len);
-#endif
+              stored[knob_slot] = parsed_val;
+              if (is_active) last_recv_encoder_val[knob_slot] = parsed_val;
             }
-#if LOG_ABLETON_MIDI
-            else {
-              Serial.print(F("[AB] rx LEGACY "));
-              Serial.print(knob_is_mixer ? F("mix") : F("dev"));
-              Serial.print(F(" slot="));
-              Serial.print(knob_slot);
-              Serial.print(F(" no_parse sysex_len="));
-              Serial.println(val_len);
-            }
-#endif
           }
           uint8_t copy_len = (disp_max < DISPLAY_TEXT_LEN - 1) ? (uint8_t)disp_max : (DISPLAY_TEXT_LEN - 1);
           memcpy(disp_dest, disp_src, copy_len);
           disp_dest[copy_len] = 0;
-          if (knob_is_mixer == mixer_mode) {
-            changed_knobs |= (uint32_t)shifter << knob_slot;
-          }
+          if (is_active) changed_knobs |= (uint32_t)shifter << knob_slot;
         } else if (50 <= sid && sid <= 57) {
           uint8_t button_num = sid - 50;
           uint16_t payload_len = (val_len > 3) ? (val_len - 3) : 0;
@@ -590,18 +496,20 @@ void loop() {
             memcpy(encoder_stored_mixer, encoder_val, sizeof(int) * 16);
             memcpy(encoder_val, encoder_stored_device, sizeof(int) * 16);
             mixer_mode = false;
+          } else if (clip_mode) {
+            memcpy(encoder_stored_clip, encoder_val, sizeof(int) * 16);
+            memcpy(encoder_val, encoder_stored_mixer, sizeof(int) * 16);
+            clip_mode = false;
+            mixer_mode = true;
           } else {
             memcpy(encoder_stored_device, encoder_val, sizeof(int) * 16);
             memcpy(encoder_val, encoder_stored_mixer, sizeof(int) * 16);
             mixer_mode = true;
           }
-          in_ctrl = false;
-          for (int j = 0; j < 16; j++) {
-            last_recv_encoder_val[j] = -1;
-          }
+          for (int j = 0; j < 16; j++) { last_recv_encoder_val[j] = -1; }
           changed_knobs |= 0xFFFFu;
         }
-        if (!mixer_mode && incr && num_inactive_global_incr == 10) {
+        if (!mixer_mode && !clip_mode && incr && num_inactive_global_incr == 10) {
           // toggle bank and layer
           Serial.println("Toggling prev layer");
           uint8_t new_ch = get_prev_layer();
@@ -634,8 +542,8 @@ void loop() {
         encoder_val[idx] = 127;
       }
 
-      // Toggle between 0 and 127 (device mode only; mixer uses continuous volume/pan)
-      if (!mixer_mode && sw_down) {
+      // Toggle between 0 and 127 in device mode only
+      if (!mixer_mode && !clip_mode && sw_down) {
         if (encoder_val[idx] < 64) {
           encoder_val[idx] = 127;
         } else {
@@ -695,52 +603,35 @@ void loop() {
   //   selected_button = 0;
   // }
 
-  // Button events (bank / layer UI — not used while in mixer mode)
-  if (!mixer_mode)
+  // Button events
+  // Button 8 (Ctrl/Shift) = clip mode toggle, always processed.
+  // Buttons 0–7 (bank select) = device mode only.
   for (uint8_t button_num = 0; button_num < 9; button_num++) {
-    uint8_t switch_idx;
-    if (button_num == 8) { // Ctrl
-      switch_idx = 25;
-    } else {
-      switch_idx = button_num + 17;
-    }
+    uint8_t switch_idx = (button_num == 8) ? 25 : button_num + 17;
     bool sw_down = (g_enc_switch_down >> switch_idx) & 1;
-    bool sw_up = (g_enc_switch_up >> switch_idx) & 1;
 
-    if (button_num == 8) { // Ctrl
+    if (button_num == 8) {
       if (sw_down) {
-        in_ctrl = !in_ctrl;
-
-        changed_buttons = 0b11111111;
+        if (clip_mode) {
+          memcpy(encoder_stored_clip, encoder_val, sizeof(int) * 16);
+          memcpy(encoder_val, encoder_stored_device, sizeof(int) * 16);
+          clip_mode = false;
+        } else {
+          if (mixer_mode) {
+            memcpy(encoder_stored_mixer, encoder_val, sizeof(int) * 16);
+          } else {
+            memcpy(encoder_stored_device, encoder_val, sizeof(int) * 16);
+          }
+          memcpy(encoder_val, encoder_stored_clip, sizeof(int) * 16);
+          mixer_mode = false;
+          clip_mode = true;
+        }
+        for (int j = 0; j < 16; j++) { last_recv_encoder_val[j] = -1; }
+        changed_knobs |= 0xFFFFu;
       }
-    } else {
-      if (in_ctrl) {
-        if (sw_up) {
-
-          // Changing channel
-          cur_channel = button_num + 1;
-          changed_buttons = 0b11111111;
-          in_ctrl = !in_ctrl;
-          controlChange(0, 127, cur_channel);
-
-          // Changing bank
-          selected_button = layer_to_selected_bank[cur_channel - 1];
-          encoder_page = selected_button;
-          Serial.print("Sending bank button ");
-          Serial.println(selected_button);
-          controlChange(2, 50 + selected_button, 127);
-
-          set_last_two_layers(cur_channel);
-        } else if (sw_down) {
-          changed_buttons = 0b11111111;
-        }
-      } else {
-        if (sw_down) {
-
-        bool wrapped = true;
-        if (wrapped) {
-          encoder_page = button_num;
-        }
+    } else if (!mixer_mode && !clip_mode) {
+      if (sw_down) {
+        encoder_page = button_num;
         changed_buttons |= 1 << button_num;
         Serial.print("Sending bank button ");
         Serial.println(button_num);
@@ -750,11 +641,8 @@ void loop() {
           selected_button = button_num;
         }
         layer_to_selected_bank[cur_channel - 1] = selected_button;
-          set_last_two_layers(cur_channel);
-        }
-
+        set_last_two_layers(cur_channel);
       }
-
     }
   }
 
@@ -781,7 +669,8 @@ void update_encoder_display(int encoder_num) {
   cur_display->setTextSize(1);
   cur_display->setCursor(0, 0);
 
-  const char *line = mixer_mode ? display_text_mixer[encoder_num] : display_text_device[encoder_num];
+  const char *line = clip_mode ? display_text_clip[encoder_num] :
+                     (mixer_mode ? display_text_mixer[encoder_num] : display_text_device[encoder_num]);
   if (line[0] == 10 || line[0] == 32) {
     cur_display->display();
     return;
@@ -1028,6 +917,7 @@ void setup() {
 
   for (int i = 0; i < 16; i++) {
     encoder_stored_device[i] = encoder_val[i];
-    encoder_stored_mixer[i] = (i < 8) ? 100 : 64;
+    encoder_stored_mixer[i]  = (i < 8) ? 100 : 64;
+    encoder_stored_clip[i]   = 64;
   }
 }

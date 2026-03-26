@@ -7,8 +7,9 @@ SYSEX_END = 0xF7
 SYSEX_NO_POSITION_SYNC = 128
 # Must match live_controller.ino CUBEFISH_KNOB_SYNC_TAG
 KNOB_SYSEX_SYNC_TAG = 0x01
-# Second SysEx data byte: device 1–16, mixer 17–32 (same physical knob index 1–16)
-MIXER_SYSEX_SLOT_OFFSET = 16
+# Second SysEx data byte offsets — must match const.h ranges
+MIXER_SYSEX_SLOT_OFFSET = 16  # slots 17–32
+CLIP_SYSEX_SLOT_OFFSET  = 32  # slots 33–48
 
 CC_STATUS = 176
 
@@ -141,6 +142,15 @@ class MixerStripEncoderElement(CustomEncoderElement):
             midi_sync,
         ) + tuple(ord(char) for char in val) + (SYSEX_END,)
         self._send_message(midi_msg)
+
+
+class ClipEncoderElement(EncoderElementBase):
+    """Plain CC input element for clip mode. encoder_num (1-16) is used by
+    ClipModeComponent to compute the SysEx slot (encoder_num + CLIP_SYSEX_SLOT_OFFSET)."""
+
+    def __init__(self, encoder_num, *a, **k):
+        (super().__init__)(*a, **k)
+        self.encoder_num = encoder_num
 
 
 # class RealigningEncoderElement(EncoderElement):

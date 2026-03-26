@@ -21,13 +21,15 @@ from ableton.v2.base import liveobj_valid
 from ableton.v3.control_surface import ControlSurface
 from ableton.v3.control_surface.components import DeviceComponent, MixerComponent, SessionRingComponent
 from .bank_definitions import CUBEFISH_BANK_DEFINITIONS
-from .encoder import CustomEncoderElement, MixerStripEncoderElement
+from .clip_mode import ClipModeComponent
+from .encoder import ClipEncoderElement, CustomEncoderElement, MixerStripEncoderElement
 import Live
 
 MIDI_CH_CUBEFISH = 15
 CC_DEVICE_ENC0 = 20
 CC_MIX_VOL0 = 40
 CC_MIX_PAN0 = 48
+CC_CLIP_ENC0 = 60
 
 # class MyDeviceComponent(DeviceComponent):
 #     parameter_controls = control_list(MappedControl, control_count=16)
@@ -432,7 +434,24 @@ class Arduino(ControlSurface):
             self._mixer.set_pan_controls(self._mixer_pan_encoders)
             self._mixer_ring.set_enabled(True)
 
-        # Mode (device vs mixer CC routing) lives only on the controller. Device uses CC 20–35,
-        # mixer uses CC 40–55 on the same channel; both mappings stay active in Live.
+        self._clip_encoders = tuple(
+            ClipEncoderElement(
+                encoder_num=idx + 1,
+                identifier=CC_CLIP_ENC0 + idx,
+                channel=MIDI_CH_CUBEFISH,
+                is_feedback_enabled=False,
+            )
+            for idx in range(16)
+        )
+        self._clip_component = ClipModeComponent(
+            send_midi=self._send_midi,
+            encoders=self._clip_encoders,
+            name="CubefishClip",
+            is_enabled=True,
+        )
+
+        # Mode routing (device / mixer / clip) is firmware-only.
+        # All three mappings stay active in Live; the controller decides
+        # which CCs to send and which SysEx buffers to display.
         self._device.set_enabled(True)
         self._mixer.set_enabled(True)
