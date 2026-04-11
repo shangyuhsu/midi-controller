@@ -34,3 +34,14 @@ This is a **reference tree** (e.g. decompiled or extracted Live factory Remote S
 1. **SysEx knob format** is shared: script (`encoder.py` / `KNOB_SYSEX_SYNC_TAG`) and firmware (`CUBEFISH_KNOB_SYNC_TAG` in the `.ino`) must stay aligned. USB MIDI SysEx assembly must preserve `0x00` data bytes (use Code Index handling, not “if (byte)” checks that drop zero).
 
 2. **Bank buttons** use CC on the channel the script expects (see `Arduino.py` / firmware `controlChange` calls).
+
+# Ableton logs
+tail -100 "/Users/shangyuhsu/Library/Preferences/Ableton/Live 11.3.43/Log.txt"
+tail -f "/Users/shangyuhsu/Library/Preferences/Ableton/Live 11.3.43/Log.txt"
+
+# Firmware logs
+cat /dev/cu.usbmodem162330301
+
+## Guidance
+When implementing the python control surface script, always reference MIDIRemoteScripts/Push to see how Ableton Push implements things
+

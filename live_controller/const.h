@@ -8,6 +8,7 @@
 #define CC_MIX_VOL0 40
 #define CC_MIX_PAN0 48
 #define CC_CLIP_ENC0 60
+#define CC_DEV_ONOFF 80   // button 7 → device on/off (ch MIDI_CH_CUBEFISH)
 /* Knob SysEx 2nd byte: 1–16=device, 17–32=mixer, 33–48=clip. Must match cubefish/encoder.py */
 #define SYSEX_ENC_DEVICE_LO 1
 #define SYSEX_ENC_DEVICE_HI 16

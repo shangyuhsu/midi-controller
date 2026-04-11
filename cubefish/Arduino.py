@@ -17,8 +17,8 @@ from __future__ import absolute_import, print_function, unicode_literals
 # # from _UserScript.DeviceComponent import DeviceComponent
 # from _Generic.SpecialMixerComponent import SpecialMixerComponent
 # from _Framework.EncoderElement import EncoderElement
-from ableton.v2.base import liveobj_valid
-from ableton.v3.control_surface import ControlSurface
+from ableton.v2.base import listens, liveobj_valid
+from ableton.v3.control_surface import ControlSurface, Component
 from ableton.v3.control_surface.components import DeviceComponent, MixerComponent, SessionRingComponent
 from .bank_definitions import CUBEFISH_BANK_DEFINITIONS
 from .clip_mode import ClipModeComponent
@@ -259,11 +259,16 @@ from .util import _LOG
 from ableton.v3.control_surface import ControlSurfaceSpecification
 from ableton.v3.control_surface import MIDI_NOTE_TYPE, ElementsBase, Layer
 
+CC_DEV_ONOFF = 80  # must match const.h
+
 class Elements(ElementsBase):
     def __init__(self, *a, **k):
         (super().__init__)(*a, **k)
-        for idx in range(8):
+        # Buttons 0–6: bank selectors (ch 2, CC 50–56)
+        for idx in range(7):
             self.add_button(50 + idx, f"bank_{idx}", channel=2, is_momentary=False)
+        # Button 7: device on/off (ch 15, CC 80)
+        self.add_button(CC_DEV_ONOFF, "device_on_off", channel=MIDI_CH_CUBEFISH, is_momentary=True)
 
 class MyDeviceComponent(DeviceComponent):
     def __init__(self, send_midi, *a, **k):
@@ -275,19 +280,26 @@ class MyDeviceComponent(DeviceComponent):
     def _set_device(self, device):
         super()._set_device(device)
 
+        names = []
         try:
-            if "serum" in device.name.lower():
-                for idx, bank_name in enumerate(["OSC 1", "OSC 2", "ENV", "LFO", "Filter", "Sub + Noise", "FX1", "FX2"]):
-                    self._send_bank_display_msg(idx, bank_name)
-            else:
-                bank_names = self._banking_info.device_bank_names(device)
-                joined_names = [" and ".join(n) for n in [(bank_names[i], bank_names[i + 1]) for i in range(len(bank_names) - 1)]]
-                if bank_names:
-                    joined_names.append(bank_names[-1])
-                for idx, bank_name in enumerate(joined_names):
-                    self._send_bank_display_msg(idx, bank_name)
+            if liveobj_valid(device):
+                if "serum" in device.name.lower():
+                    names = ["OSC 1", "OSC 2", "ENV", "LFO", "Filter", "Sub + Noise", "FX1", "FX2"]
+                else:
+                    bank_names = self._banking_info.device_bank_names(device)
+                    joined_names = [" and ".join(n) for n in [(bank_names[i], bank_names[i + 1]) for i in range(len(bank_names) - 1)]]
+                    if bank_names:
+                        joined_names.append(bank_names[-1])
+                    names = joined_names
         except Exception as e:
             _LOG(f"Saw {type(e)}: {e}")
+        # Only send labels for buttons 0–6; button 7 is device on/off.
+        # Clear any slots beyond the device's bank count so stale labels don't linger.
+        for idx in range(7):
+            if idx < len(names):
+                self._send_bank_display_msg(idx, names[idx])
+            else:
+                self._send_bank_display_msg(idx, "")
         # cur_str = ""
         # cur_idx = 0
         # for idx, bank_name in enumerate(bank_names):
@@ -302,9 +314,63 @@ class MyDeviceComponent(DeviceComponent):
         #     self._send_bank_display_msg(cur_idx, f"{cur_str}")
 
     def _send_bank_display_msg(self, button_num, message):
+        # Empty message needs at least 4 bytes to pass firmware filter; send space to clear
+        if not message:
+            message = " "
         midi_msg = (SYSEX_START, 50 + button_num) + tuple(ord(char) for char in message) + (SYSEX_END,)
         _LOG(f"Bank {button_num}: {message} ({midi_msg})")
         self.send_midi(midi_msg)
+
+class DeviceOnOffComponent(Component):
+    """
+    Watches song.appointed_device's on/off state via parameters[0] (the standard
+    bypass parameter present on all Live devices), shows current state on button
+    slot 7's OLED display, and toggles it when the hardware button fires CC_DEV_ONOFF.
+
+    Push2 uses the same approach (device_navigation.py: set_enabled / is_on helpers)
+    because some native devices (e.g. Eq8) do not expose add_is_on_listener.
+    """
+    _BUTTON_SLOT = 7  # SysEx id = 50 + 7 = 57
+
+    def __init__(self, send_midi, *a, **k):
+        super().__init__(*a, **k)
+        self._send_midi_fn = send_midi
+        self._device = None
+        self._on_appointed_device_changed.subject = self.song
+        self._on_appointed_device_changed()
+
+    def on_button_pressed(self):
+        if liveobj_valid(self._device):
+            param = self._device.parameters[0]
+            if param.is_enabled:
+                param.value = int(not bool(param.value))
+
+    @listens("appointed_device")
+    def _on_appointed_device_changed(self):
+        device = self.song.appointed_device
+        device = device if liveobj_valid(device) else None
+        if device is self._device:
+            return
+        self._device = device
+        # Listen to parameters[0] (bypass) value changes instead of device.is_on,
+        # which is not listenable on all device types.
+        param = device.parameters[0] if (liveobj_valid(device) and len(device.parameters) > 0) else None
+        self._on_param_value_changed.subject = param
+        self._update_display()
+
+    @listens("value")
+    def _on_param_value_changed(self):
+        self._update_display()
+
+    def _update_display(self):
+        if liveobj_valid(self._device) and len(self._device.parameters) > 0:
+            state = "On" if bool(self._device.parameters[0].value) else "Off"
+        else:
+            state = ""
+        text = f"Bypass\n{state}"
+        msg = (SYSEX_START, 50 + self._BUTTON_SLOT) + tuple(ord(c) for c in text) + (SYSEX_END,)
+        self._send_midi_fn(msg)
+
 
 class Arduino(ControlSurface):
 
@@ -382,7 +448,17 @@ class Arduino(ControlSurface):
     def setup(self):
         self._device = MyDeviceComponent(send_midi=self._send_midi, bank_size=16)
         self._device._banking_info._num_simultaneous_banks = 1
-        self._device._bank_navigation_component.set_bank_select_buttons([getattr(self.elements, f"bank_{idx}") for idx in range(8)])
+        # Only 7 bank buttons; button 7 is device on/off
+        self._device._bank_navigation_component.set_bank_select_buttons([getattr(self.elements, f"bank_{idx}") for idx in range(7)])
+
+        self._device_onoff = DeviceOnOffComponent(
+            send_midi=self._send_midi,
+            name="DeviceOnOff",
+            is_enabled=True,
+        )
+        self.elements.device_on_off.add_value_listener(
+            lambda v: self._device_onoff.on_button_pressed() if v else None
+        )
 
         self._device_encoders = tuple(
             CustomEncoderElement(

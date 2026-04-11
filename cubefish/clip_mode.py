@@ -7,9 +7,9 @@ from ableton.v3.control_surface import Component
 
 from .encoder import (
     CLIP_SYSEX_SLOT_OFFSET,
+    KNOB_SYSEX_CLEAR_TAG,
     KNOB_SYSEX_SYNC_TAG,
     SYSEX_END,
-    SYSEX_NO_POSITION_SYNC,
     SYSEX_START,
 )
 from .util import _LOG
@@ -161,23 +161,29 @@ class ClipModeComponent(Component):
         name, value_str, midi_sync = self._build_display(idx, clip)
 
         display = f"{name}\n{value_str}".strip("\n")
-        msg = (
-            SYSEX_START, sysex_slot, KNOB_SYSEX_SYNC_TAG, midi_sync,
-        ) + tuple(ord(c) for c in display) + (SYSEX_END,)
+        # With sync: F0, slot, SYNC_TAG(0x01), midi_value, display..., F7
+        # Clear:     F0, slot, CLEAR_TAG(0x02), F7
+        if midi_sync is not None:
+            msg = (
+                SYSEX_START, sysex_slot, KNOB_SYSEX_SYNC_TAG, midi_sync,
+            ) + tuple(ord(c) for c in display) + (SYSEX_END,)
+        else:
+            msg = (SYSEX_START, sysex_slot, KNOB_SYSEX_CLEAR_TAG, SYSEX_END)
 
         if msg != self._last_sent[idx]:
             self._send_midi_fn(msg)
             self._last_sent[idx] = msg
 
     def _build_display(self, idx, clip):
-        """Return (name, value_str, midi_sync) for the given slot."""
+        """Return (name, value_str, midi_sync) for the given slot.
+        midi_sync is None when no encoder sync is needed."""
         if idx < len(_PARAM_LABELS):
             label, audio_only = _PARAM_LABELS[idx]
         else:
-            return ("", "", SYSEX_NO_POSITION_SYNC)
+            return ("", "", None)
 
         if not liveobj_valid(clip) or (audio_only and not clip.is_audio_clip):
-            return (label, "---", SYSEX_NO_POSITION_SYNC)
+            return (label, "---", None)
 
         try:
             if idx == 0:
@@ -206,6 +212,6 @@ class ClipModeComponent(Component):
                 return ("Warp Mode", "Off", 0)
         except Exception as exc:
             _LOG(f"[ClipMode] display idx={idx} err: {exc}")
-            return (label, "err", SYSEX_NO_POSITION_SYNC)
+            return (label, "err", None)
 
-        return (label, "---", SYSEX_NO_POSITION_SYNC)
+        return (label, "---", None)

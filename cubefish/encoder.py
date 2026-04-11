@@ -1,12 +1,12 @@
 from __future__ import absolute_import, print_function, unicode_literals
 from ableton.v3.control_surface.elements import EncoderElement as EncoderElementBase
 from ableton.v3.live import liveobj_valid, parameter_value_to_midi_value
+from .util import _LOG
 SYSEX_START = 0xF0
 SYSEX_END = 0xF7
-# Firmware uses 0-127 for position sync; 128 = skip sync (unmapped / no parameter)
-SYSEX_NO_POSITION_SYNC = 128
-# Must match live_controller.ino CUBEFISH_KNOB_SYNC_TAG
-KNOB_SYSEX_SYNC_TAG = 0x01
+# Must match live_controller.ino
+KNOB_SYSEX_SYNC_TAG = 0x01   # Has parameter: F0, slot, 0x01, midi, display..., F7
+KNOB_SYSEX_CLEAR_TAG = 0x02  # No parameter:  F0, slot, 0x02, F7
 # Second SysEx data byte offsets — must match const.h ranges
 MIXER_SYSEX_SLOT_OFFSET = 16  # slots 17–32
 CLIP_SYSEX_SLOT_OFFSET  = 32  # slots 33–48
@@ -73,18 +73,25 @@ class CustomEncoderElement(EncoderElementBase):
 
         val = f"{name}\n{value_str}".strip("\n") if name or value_str else ""
 
+        # Firmware protocol:
+        #   With sync: F0, slot, SYNC_TAG(0x01), midi_value(0-127), display..., F7
+        #   Clear:     F0, slot, CLEAR_TAG(0x02), F7
         if liveobj_valid(self.mapped_object):
             midi_sync = parameter_value_to_midi_value(
                 self.mapped_object, max_value=(self._max_value))
+            midi_msg = (
+                SYSEX_START,
+                self.encoder_num,
+                KNOB_SYSEX_SYNC_TAG,
+                midi_sync,
+            ) + tuple(ord(char) for char in val) + (SYSEX_END,)
         else:
-            midi_sync = SYSEX_NO_POSITION_SYNC
-        # Firmware: F0, enc 1-16, KNOB_SYSEX_SYNC_TAG, midi 0-127 or 128=skip, display..., F7
-        midi_msg = (
-            SYSEX_START,
-            self.encoder_num,
-            KNOB_SYSEX_SYNC_TAG,
-            midi_sync,
-        ) + tuple(ord(char) for char in val) + (SYSEX_END,)
+            midi_msg = (
+                SYSEX_START,
+                self.encoder_num,
+                KNOB_SYSEX_CLEAR_TAG,
+                SYSEX_END,
+            )
         self._send_message(midi_msg)
 
         # midi_msg = (0xB0 | self._msg_channel,) + (1, ident, self.)
@@ -98,8 +105,20 @@ class CustomEncoderElement(EncoderElementBase):
 
     def _send_message(self, message):
         if message != self._last_sent_parameter_message:
+            _LOG(f"[ENC] sysex enc={self.encoder_num} msg={message}")
             self.send_midi(message)
         self._last_sent_parameter_message = message
+
+    def release_parameter(self):
+        super().release_parameter()
+        _LOG(f"[ENC] release enc={self.encoder_num}")
+        # The base class defers notify_parameter_name via a task, which can race
+        # against the next display update. Clear the OLED immediately instead.
+        # Force-clear cache so the empty message is always sent.
+        self._last_sent_parameter_message = None
+        self._send_parameter_feedback()
+
+
 
     def _parameter_value_changed(self):
         super()._parameter_value_changed()
@@ -129,18 +148,23 @@ class MixerStripEncoderElement(CustomEncoderElement):
         elif value_str.startswith("1 "):
             value_str = value_str[2:]
         val = f"{name}\n{value_str}".strip("\n") if name or value_str else ""
+        sysex_slot = self.encoder_num + MIXER_SYSEX_SLOT_OFFSET
         if liveobj_valid(self.mapped_object):
             midi_sync = parameter_value_to_midi_value(
                 self.mapped_object, max_value=(self._max_value))
+            midi_msg = (
+                SYSEX_START,
+                sysex_slot,
+                KNOB_SYSEX_SYNC_TAG,
+                midi_sync,
+            ) + tuple(ord(char) for char in val) + (SYSEX_END,)
         else:
-            midi_sync = SYSEX_NO_POSITION_SYNC
-        sysex_slot = self.encoder_num + MIXER_SYSEX_SLOT_OFFSET
-        midi_msg = (
-            SYSEX_START,
-            sysex_slot,
-            KNOB_SYSEX_SYNC_TAG,
-            midi_sync,
-        ) + tuple(ord(char) for char in val) + (SYSEX_END,)
+            midi_msg = (
+                SYSEX_START,
+                sysex_slot,
+                KNOB_SYSEX_CLEAR_TAG,
+                SYSEX_END,
+            )
         self._send_message(midi_msg)
 
 

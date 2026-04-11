@@ -17,8 +17,9 @@ IntervalTimer scan_timer;
 #ifndef LOG_ABLETON_MIDI
 #define LOG_ABLETON_MIDI 1
 #endif
-/** Cubefish knob sysex: ... enc, SYNC_TAG, midi_byte, display... */
-#define CUBEFISH_KNOB_SYNC_TAG 0x01
+/** Cubefish knob sysex tags */
+#define CUBEFISH_KNOB_SYNC_TAG  0x01  // F0, slot, 0x01, midi, display..., F7
+#define CUBEFISH_KNOB_CLEAR_TAG 0x02  // F0, slot, 0x02, F7 — clears display
 byte sysex_buf[SYSEX_BUF_SIZE];
 int sysex_index = 0;
 uint8_t prev_display = TCA_R;
@@ -376,7 +377,7 @@ void loop() {
         sysex_index = 0;
 
         if (val_len < 4 || sysex_buf[0] != 0xF0) {
-          continue;
+          continue;  // Minimum valid SysEx: F0, slot, tag, F7 = 4 bytes
         }
         // Device knob: F0, 1-16, TAG, midi, text..., F7  -> display_text_device
         // Mixer knob: F0, 17-32, TAG, midi, text..., F7 -> display_text_mixer
@@ -399,9 +400,11 @@ void loop() {
           else if (knob_mode == 1) { disp_dest = display_text_mixer[knob_slot];  stored = encoder_stored_mixer; }
           else                     { disp_dest = display_text_device[knob_slot]; stored = encoder_stored_device; }
 
-          const uint8_t *disp_src;
-          uint16_t disp_max;
+          const uint8_t *disp_src = NULL;
+          uint16_t disp_max = 0;
+
           if (val_len >= 6 && sysex_buf[2] == CUBEFISH_KNOB_SYNC_TAG) {
+            // SYNC_TAG: F0, slot, 0x01, midi, display..., F7
             uint8_t midi_sync = sysex_buf[3];
             disp_src = sysex_buf + 4;
             disp_max = (val_len > 5) ? (val_len - 5) : 0;
@@ -415,35 +418,31 @@ void loop() {
               Serial.print(F(" midi=")); Serial.println(midi_sync);
 #endif
             }
+          } else if (sysex_buf[2] == CUBEFISH_KNOB_CLEAR_TAG) {
+            // CLEAR_TAG: F0, slot, 0x02, F7 — clear display, no sync
+            disp_src = NULL;
+            disp_max = 0;
+#if LOG_ABLETON_MIDI
+            Serial.print(F("[AB] clear slot=")); Serial.println(knob_slot);
+#endif
           } else {
-            /* Legacy: infer sync from display text */
+            // Legacy: F0, slot, display..., F7 (no tag)
             disp_src = sysex_buf + 2;
             disp_max = (val_len > 3) ? (val_len - 3) : 0;
-            int parsed_val = -1;
-            int value_start = 2;
-            for (int i = 2; i < val_len - 1; i++) {
-              if (sysex_buf[i] == '\n') { value_start = i + 1; break; }
-            }
-            for (int i = value_start; i < val_len - 1; i++) {
-              if (sysex_buf[i] >= '0' && sysex_buf[i] <= '9') {
-                parsed_val = 0;
-                while (i < val_len - 1 && sysex_buf[i] >= '0' && sysex_buf[i] <= '9') {
-                  parsed_val = parsed_val * 10 + (sysex_buf[i] - '0');
-                  if (parsed_val > 127) parsed_val = 127;
-                  i++;
-                }
-                break;
-              }
-            }
-            if (parsed_val >= 0) {
-              stored[knob_slot] = parsed_val;
-              if (is_active) last_recv_encoder_val[knob_slot] = parsed_val;
-            }
           }
-          uint8_t copy_len = (disp_max < DISPLAY_TEXT_LEN - 1) ? (uint8_t)disp_max : (DISPLAY_TEXT_LEN - 1);
-          memcpy(disp_dest, disp_src, copy_len);
-          disp_dest[copy_len] = 0;
-          if (is_active) changed_knobs |= (uint32_t)shifter << knob_slot;
+
+          // Update display text
+          if (disp_src != NULL) {
+            uint8_t copy_len = (disp_max < DISPLAY_TEXT_LEN - 1) ? (uint8_t)disp_max : (DISPLAY_TEXT_LEN - 1);
+            memcpy(disp_dest, disp_src, copy_len);
+            disp_dest[copy_len] = 0;
+          } else {
+            disp_dest[0] = 0;  // Clear display
+          }
+
+          if (is_active) {
+            changed_knobs |= (uint32_t)shifter << knob_slot;
+          }
         } else if (50 <= sid && sid <= 57) {
           uint8_t button_num = sid - 50;
           uint16_t payload_len = (val_len > 3) ? (val_len - 3) : 0;
@@ -625,7 +624,13 @@ void loop() {
         for (int j = 0; j < 16; j++) { last_recv_encoder_val[j] = -1; }
         changed_knobs |= 0xFFFFu;
       }
+    } else if (button_num == 7) {
+      // Device on/off toggle — sends to cubefish script, never used as bank select
+      if (sw_down && !mixer_mode && !clip_mode) {
+        controlChange(MIDI_CH_CUBEFISH, CC_DEV_ONOFF, 127);
+      }
     } else if (!mixer_mode && !clip_mode) {
+      // Bank select — buttons 0–6 only
       if (sw_down) {
         encoder_page = button_num;
         changed_buttons |= 1 << button_num;
@@ -675,7 +680,8 @@ void update_encoder_display(int encoder_num) {
 
   const char *line = clip_mode ? display_text_clip[encoder_num] :
                      (mixer_mode ? display_text_mixer[encoder_num] : display_text_device[encoder_num]);
-  if (line[0] == 10 || line[0] == 32) {
+  // If empty (null), newline, or space — show blank display (no text, no value bar)
+  if (line[0] == 0 || line[0] == 10 || line[0] == 32) {
     cur_display->display();
     return;
   }
