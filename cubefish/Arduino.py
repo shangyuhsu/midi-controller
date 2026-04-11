@@ -286,11 +286,10 @@ class MyDeviceComponent(DeviceComponent):
                 if "serum" in device.name.lower():
                     names = ["OSC 1", "OSC 2", "ENV", "LFO", "Filter", "Sub + Noise", "FX1", "FX2"]
                 else:
-                    bank_names = self._banking_info.device_bank_names(device)
-                    joined_names = [" and ".join(n) for n in [(bank_names[i], bank_names[i + 1]) for i in range(len(bank_names) - 1)]]
-                    if bank_names:
-                        joined_names.append(bank_names[-1])
-                    names = joined_names
+                    bank_names = list(self._banking_info.device_bank_names(device))
+                    # Framework returns overlapping pairs: [0 and 1, 1 and 2, 2 and 3, ...]
+                    # Take only even indices to get non-overlapping: [0 and 1, 2 and 3, ...]
+                    names = [bank_names[i] for i in range(0, len(bank_names), 2)]
         except Exception as e:
             _LOG(f"Saw {type(e)}: {e}")
         # Only send labels for buttons 0–6; button 7 is device on/off.
@@ -447,7 +446,7 @@ class Arduino(ControlSurface):
 
     def setup(self):
         self._device = MyDeviceComponent(send_midi=self._send_midi, bank_size=16)
-        self._device._banking_info._num_simultaneous_banks = 1
+        self._device._banking_info._num_simultaneous_banks = 2
         # Only 7 bank buttons; button 7 is device on/off
         self._device._bank_navigation_component.set_bank_select_buttons([getattr(self.elements, f"bank_{idx}") for idx in range(7)])
 

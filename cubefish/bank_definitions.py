@@ -36,6 +36,36 @@ _CUBEFISH_EQ8 = IndexedDict(
     (
         _eq8_pair_bank(1, 2, "Banks 1-2"),
         _eq8_pair_bank(3, 4, "Banks 3-4"),
+        (
+            "Output",
+            {
+                BANK_PARAMETERS_KEY: (
+                    "Output Gain",
+                    "Adaptive Q",
+                    "Scale",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                )
+            },
+        ),
+        (
+            "+",
+            {
+                BANK_PARAMETERS_KEY: (
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                )
+            },
+        ),
         _eq8_pair_bank(5, 6, "Banks 5-6"),
         _eq8_pair_bank(7, 8, "Banks 7-8"),
         (
@@ -53,73 +83,70 @@ _CUBEFISH_EQ8 = IndexedDict(
                 )
             },
         ),
+    )
+)
+
+# Reverb — 4 banks of 8 parameters (framework combines pairs with bank_size=16)
+_CUBEFISH_REVERB = IndexedDict(
+    (
         (
-            "All frequency",
+            "Input",
             {
                 BANK_PARAMETERS_KEY: (
-                    "1 Frequency A",
-                    "2 Frequency A",
-                    "3 Frequency A",
-                    "4 Frequency A",
-                    "5 Frequency A",
-                    "6 Frequency A",
-                    "7 Frequency A",
-                    "8 Frequency A",
+                    "In LowCut On", "In HighCut On", "In Filter Freq", "In Filter Width",
+                    "LowShelf On", "LowShelf Freq", "LowShelf Gain", "Scale",
                 )
             },
         ),
         (
-            "All gain",
+            "Core",
             {
                 BANK_PARAMETERS_KEY: (
-                    "1 Gain A",
-                    "2 Gain A",
-                    "3 Gain A",
-                    "4 Gain A",
-                    "5 Gain A",
-                    "6 Gain A",
-                    "7 Gain A",
-                    "8 Gain A",
+                    "HiFilter On", "HiFilter Freq", "HiShelf Gain", "Diffusion",
+                    "Predelay", "Room Size", "Decay Time", "Dry/Wet",
                 )
             },
         ),
         (
-            "Output",
+            "Global",
             {
                 BANK_PARAMETERS_KEY: (
-                    "Adaptive Q",
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                    "Scale",
-                    "Output Gain",
+                    "Reflect Level", "Diffuse Level", "Stereo Image", "Density",
+                    "Freeze On", "Flat On", "", "",
+                )
+            },
+        ),
+        (
+            "ER/Chorus",
+            {
+                BANK_PARAMETERS_KEY: (
+                    "ER Spin On", "ER Spin Rate", "ER Spin Amount", "ER Shape",
+                    "Chorus On", "Chorus Rate", "Chorus Amount", "",
                 )
             },
         ),
     )
 )
 
-# EQ Three — short names for small OLED; same parameters as stock FilterEQ3.
+# EQ Three — organized into logical groups
 _CUBEFISH_FILTEREQ3 = IndexedDict(
     (
         (
-            "EQ",
+            "Main",
             {
                 BANK_PARAMETERS_KEY: (
-                    "LowOn",
-                    "MidOn",
-                    "HighOn",
-                    "GainLo",
-                    "GainMid",
-                    "GainHi",
-                    "FreqLo",
-                    "FreqHi",
+                    "GainLo", "GainMid", "GainHi", "", "FreqLo", "Slope", "FreqHi", "",
                 )
             },
         ),
-        ("Slope", {BANK_PARAMETERS_KEY: ("Slope", "", "", "", "", "", "", "")}),
+        (
+            "On/Off",
+            {
+                BANK_PARAMETERS_KEY: (
+                    "LowOn", "MidOn", "HighOn", "", "", "", "", "",
+                )
+            },
+        ),
     )
 )
 
@@ -129,6 +156,7 @@ def build_cubefish_bank_definitions():
     merged = dict(BANK_DEFINITIONS)
     merged["Eq8"] = _CUBEFISH_EQ8
     merged["FilterEQ3"] = _CUBEFISH_FILTEREQ3
+    merged["Reverb"] = _CUBEFISH_REVERB
     return merged
 
 
