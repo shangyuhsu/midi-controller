@@ -7,7 +7,7 @@
 from __future__ import absolute_import, print_function, unicode_literals
 
 from ableton.v2.base.collection import IndexedDict
-from ableton.v3.control_surface import BANK_PARAMETERS_KEY
+from ableton.v3.control_surface import BANK_PARAMETERS_KEY, use
 from ableton.v3.control_surface.default_bank_definitions import BANK_DEFINITIONS
 
 
@@ -128,6 +128,45 @@ _CUBEFISH_REVERB = IndexedDict(
     )
 )
 
+# Delay — 4 banks of 8 parameters
+_CUBEFISH_DELAY = IndexedDict(
+    (
+        (
+            "Time",
+            {
+                BANK_PARAMETERS_KEY: (
+                    # L timing: 16th when synced, Time when not
+                    use("L 16th").if_parameter("L Sync").has_value("On").else_use("L Time"),
+                    # R timing: follows R settings when unlinked, follows L when linked
+                    use("R 16th").if_parameter("R Sync").has_value("On").and_parameter("Link").has_value("Off").else_use("R Time").if_parameter("Link").has_value("Off").else_use("L 16th").if_parameter("L Sync").has_value("On").else_use("L Time"),
+                    # L/R sync mode selectors
+                    use("L Sync Enum").with_name("L Mode"),
+                    use("R Sync Enum").with_name("R Mode").if_parameter("Link").has_value("Off").else_use("L Sync Enum").with_name("(Linked)"),
+                    "L Offset", "R Offset", "Feedback", "Dry/Wet",
+                )
+            },
+        ),
+        (
+            "Filter/Mod",
+            {
+                BANK_PARAMETERS_KEY: (
+                    "Link", "Filter On", "Filter Freq", "Filter Width",
+                    use("Mod Freq").with_name("Mod Rate"), "Filter < Mod", "Dly < Mod", "Ping Pong",
+                )
+            },
+        ),
+        (
+            "Misc",
+            {
+                BANK_PARAMETERS_KEY: (
+                    use("Delay Mode").with_name("DlayMd"), "Freeze", "", "",
+                    "", "", "", "",
+                )
+            },
+        ),
+    )
+)
+
 # EQ Three — organized into logical groups
 _CUBEFISH_FILTEREQ3 = IndexedDict(
     (
@@ -157,6 +196,7 @@ def build_cubefish_bank_definitions():
     merged["Eq8"] = _CUBEFISH_EQ8
     merged["FilterEQ3"] = _CUBEFISH_FILTEREQ3
     merged["Reverb"] = _CUBEFISH_REVERB
+    merged["Delay"] = _CUBEFISH_DELAY
     return merged
 
 
