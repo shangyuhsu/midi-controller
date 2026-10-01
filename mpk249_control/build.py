@@ -32,6 +32,7 @@ COLOURS = ["Off", "Red", "Orange", "Amber", "Yellow", "Green", "Green Blue", "Aq
 # What bank A had in the preset when this was written - the menus' defaults.
 DEFAULT_COLOURS = [12, 12, 4, 2, 4, 15, 7, 15, 6, 15, 6, 7, 16, 16, 16, 16]
 DEFAULT_PRESSED = 16
+DEFAULT_SELECTED = 5    # Green
 
 # What each pad does (mpk249.js's PAD_ACTIONS), shown under its menu.
 PAD_LABELS = {13: "Track 1", 14: "Track 2", 15: "Track 3", 16: "Track 4",
@@ -159,12 +160,18 @@ def build():
             p.connect(m, 0, pre, 0)
             p.connect(pre, 0, js, 0)
 
+    # A pad held down, and the selected track's pad - each one colour for all.
     py = y0 + 4 * cell_h + 2
-    p.label("Pressed", [400, 620, 60, 16], [x0, py, 50, 15], size=9.0)
-    pm = p.menu("Pressed colour", "Pressed", [460, 620, 80, 16], [x0 + cell_w, py, cell_w * 2 - 2, 15], DEFAULT_PRESSED)
-    ppre = p.obj("prepend pressed", 460, 650, nin=1, nout=1, w=110)
-    p.connect(pm, 0, ppre, 0)
-    p.connect(ppre, 0, js, 0)
+
+    for n, (text, longname, default, message) in enumerate(
+            [("Pressed", "Pressed colour", DEFAULT_PRESSED, "pressed"),
+             ("Selected", "Selected track colour", DEFAULT_SELECTED, "selected")]):
+        px = x0 + n * 108
+        p.label(text, [400 + n * 200, 620, 60, 16], [px, py, 44, 15], size=9.0)
+        m = p.menu(longname, text, [460 + n * 200, 620, 80, 16], [px + 44, py, 62, 15], default)
+        pre = p.obj("prepend " + message, 460 + n * 200, 650, nin=1, nout=1, w=110)
+        p.connect(m, 0, pre, 0)
+        p.connect(pre, 0, js, 0)
 
     params = dict(p.params)
     params["inherited_shortname"] = 1

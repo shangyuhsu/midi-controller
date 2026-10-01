@@ -80,6 +80,9 @@ var selectHeld = false;
 // Set by the device's menus (colour codes 0-16, as the MPK's manual lists them).
 var padColours = [12, 12, 4, 2, 4, 15, 7, 15, 6, 15, 6, 7, 16, 16, 16, 16];
 var pressedColour = 16;
+var selectedColour = 5;     // the selected track's pad, in place of its own colour
+
+var lastSent = {};          // address -> the block last written there
 
 function status (text)
 {
@@ -184,7 +187,25 @@ function init ()
         ok += watch ("Encoder_" + e, encoderHandler (e)) ? 1 : 0;
 
     status ("MPK249 Port A: " + ok + " of 24 controls.");
+
+    // The selected track's pad is lit: follow the selection, and the track list it indexes.
+    observeLive ("live_set view", "selected_track");
+    observeLive ("live_set", "visible_tracks");
+
+    lastSent = {};
     sendColours ();
+}
+
+function observeLive (path, property)
+{
+    var observer = new LiveAPI (function (args)
+    {
+        if (args[0] == property)
+            scheduleColours ();
+    }, path);
+
+    observer.property = property;
+    observers.push (observer);
 }
 
 // Reloaded by autowatch while already running in Live: take the controls again.
@@ -346,36 +367,69 @@ function nudge (path, delta)
 // Pad colours
 
 // From the device's menus: "colour <pad> <code>", "pressed <code>".
+// From the device's menus: "colour <pad> <code>", "pressed <code>", "selected <code>".
 function colour (pad, code)
 {
     if (pad >= 1 && pad <= 16)
     {
         padColours[pad - 1] = code;
-        coloursTask.cancel ();
-        coloursTask.schedule (30);     // a preset recall sets all sixteen at once
+        scheduleColours ();
     }
 }
 
 function pressed (code)
 {
     pressedColour = code;
+    scheduleColours ();
+}
+
+function selected (code)
+{
+    selectedColour = code;
+    scheduleColours ();
+}
+
+// Batched: a preset recall sets every menu at once, a track change fires twice.
+var coloursTask = new Task (function () { sendColours (); });
+
+function scheduleColours ()
+{
     coloursTask.cancel ();
     coloursTask.schedule (30);
 }
 
-var coloursTask = new Task (function () { sendColours (); });
+// The pad that selects the selected track, or 0 when it is none of them.
+function selectedTrackPad ()
+{
+    var track = new LiveAPI ("live_set view selected_track");
+    var tracks = idsOf (new LiveAPI ("live_set").get ("visible_tracks"));
+
+    for (var i = 0; i < tracks.length; ++i)
+        if (Number (tracks[i]) == Number (track.id))
+            for (var pad in PAD_ACTIONS)
+                if (PAD_ACTIONS[pad][0] == "track" && PAD_ACTIONS[pad][1] == i + 1)
+                    return Number (pad);
+
+    return 0;
+}
 
 function sendColours ()
 {
     if (surface == null)
         return;
 
+    var unpressed = padColours.slice ();
     var held = [];
+
+    var lit = selectedTrackPad ();
+
+    if (lit > 0)
+        unpressed[lit - 1] = selectedColour;
 
     for (var i = 0; i < 16; ++i)
         held.push (pressedColour);
 
-    sendColourBlock (COLOUR_ADDRESS_OFF, padColours);
+    sendColourBlock (COLOUR_ADDRESS_OFF, unpressed);
     sendColourBlock (COLOUR_ADDRESS_ON, held);
 }
 
@@ -389,5 +443,14 @@ function sendColourBlock (address, colours)
         message.push (Math.max (0, Math.min (16, Math.floor (colours[i]))));
 
     message.push (0xf7);
+
+    // Only what changed: every track selection would otherwise rewrite both blocks.
+    var key = String (address);
+    var text = message.join (" ");
+
+    if (lastSent[key] == text)
+        return;
+
+    lastSent[key] = text;
     surface.call.apply (surface, message);
 }
