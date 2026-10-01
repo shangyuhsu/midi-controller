@@ -67,16 +67,16 @@ var ENCODER_ACTIONS = {
 var detentsPerStep = { cursor: 2, sideScroll: 1, zoom: 2 };
 
 /*  What the cursor knob moves (the device's Cursor menu):
-    0  the insert marker, a grid step at a time - the arrow keys. It is on the
-       selected track, and follows it when a track pad changes track. But with
-       the loop brace selected, the arrow keys move the loop instead - and it
-       is not where playback starts: Live's API cannot read where it is, so
-       the start marker cannot be brought to it.
-    1  the start marker - where playback starts - by the device's Step (in
-       beats). Not tied to a track, so it stays put across track changes.
-       The default.
+    0  the arrow keys, typed (mpk249-keys.js): the insert marker by the grid,
+       and the start marker with it. The API's own arrows (scroll_view) move
+       the insert marker only, leaving playback starting where it was. With
+       the loop brace selected, the arrows move the loop - Live's doing. The
+       default.
+    1  the start marker alone, by the device's Step (in beats).
+
+    With Select held, either way: Shift and the arrows, growing the time selection.
 */
-var cursorMode = 1;
+var cursorMode = 0;
 var CURSOR_STEPS = [0.25, 0.5, 1, 2, 4, 8, 16];
 var cursorStep = 1;
 
@@ -405,6 +405,8 @@ function encoderHandler (encoder)
         var delta = value < 64 ? value : value - 128;
         var action = ENCODER_ACTIONS[encoder];
 
+        outlet (1, "log", "knob " + encoder + " (" + action + ") " + delta);
+
         if (delta == 0)
             return;
 
@@ -456,10 +458,9 @@ function runEncoder (action, delta)
 {
     switch (action)
     {
-        // The arrow keys - with Shift while Select is held, growing the time selection.
         case "cursor":
             if (selectHeld || cursorMode == 0)
-                appView ().call ("scroll_view", delta > 0 ? 3 : 2, "Arranger", selectHeld ? 1 : 0);
+                typeArrow (delta > 0, selectHeld);
             else
                 moveStartMarker (delta);
             break;
@@ -479,6 +480,25 @@ function runEncoder (action, delta)
         case "cueVolume":    nudge ("live_set master_track mixer_device cue_volume", delta); break;
         case "masterVolume": nudge ("live_set master_track mixer_device volume", delta); break;
     }
+}
+
+/*  An arrow key, typed - into the arrangement, which is given the keyboard
+    first (at most once a second: it is a round trip to Live) so the key
+    does not land in the browser or a clip.
+*/
+var arrangerFocusedAt = 0;
+
+function typeArrow (right, shift)
+{
+    var now = new Date ().getTime ();
+
+    if (now - arrangerFocusedAt > 1000)
+    {
+        appView ().call ("focus_view", "Arranger");
+        arrangerFocusedAt = now;
+    }
+
+    outlet (1, "key", (shift ? "shift" : "") + (right ? (shift ? "Right" : "right") : (shift ? "Left" : "left")));
 }
 
 /*  The start marker, set directly - not with scroll_view, which is the arrow

@@ -14,7 +14,17 @@
 
 const maxApi = require("max-api");
 const { spawn } = require("child_process");
+const fs = require("fs");
+const os = require("os");
 const path = require("path");
+
+// Every request and every reply from the poster, for when something goes quiet.
+const LOG = path.join(os.homedir(), "Library", "Logs", "MPK249 Control.log");
+fs.writeFileSync(LOG, "MPK249 Control started " + new Date().toISOString() + "\n");
+
+function log(line) {
+    fs.appendFile(LOG, new Date().toISOString().slice(11, 23) + "  " + line + "\n", () => {});
+}
 
 // Key codes are the US layout's, which shortcuts follow on any layout.
 const KEYS = {
@@ -22,6 +32,10 @@ const KEYS = {
     gridCoarser:  { code: 19, mods: "cmd" },        // Cmd-2  Widen Grid
     pluginWindow: { code: 35, mods: "cmd,alt" },    // Cmd-Alt-P  Show/Hide Plug-In Windows
     loopSelection: { code: 37, mods: "cmd" },       // Cmd-L  Loop Selection
+    left:         { code: 123, mods: "-" },         // the arrow keys: insert marker and start marker
+    right:        { code: 124, mods: "-" },
+    shiftLeft:    { code: 123, mods: "shift" },     // ...growing the time selection
+    shiftRight:   { code: 124, mods: "shift" },
 };
 
 let helper = null;
@@ -42,6 +56,7 @@ function start() {
 
         for (const line of lines.filter(Boolean)) {
             maxApi.post("mpk249-events: " + line);
+            log("poster: " + line);
 
             if (line.startsWith("trusted"))
                 status(line === "trusted yes" ? "Keys and scrolling: ready."
@@ -51,11 +66,14 @@ function start() {
 
     helper.on("exit", (code) => {
         maxApi.post("mpk249-events stopped (" + code + ")");
+        log("poster stopped (" + code + ")");
         helper = null;
     });
 }
 
 function send(line) {
+    log("-> " + line);
+
     if (helper === null)
         start();
 
@@ -65,11 +83,19 @@ function send(line) {
 maxApi.addHandler("key", (name) => {
     const key = KEYS[name];
 
+    if (!key)
+        log("no key named " + name);
+
     if (key)
         send("key " + key.code + " " + key.mods);
 });
 
+// The device's own lines, into the same log.
+maxApi.addHandler("log", (...words) => log("device: " + words.join(" ")));
+
 maxApi.addHandler("hscroll", (lines) => {
+    log("hscroll request: " + lines);
+
     if (lines)
         send("hscroll " + Math.round(lines));
 });

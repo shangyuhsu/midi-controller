@@ -161,7 +161,7 @@ def build():
 
     # What the cursor knob moves, and the start marker's step.
     p.label("Cursor", [30, 450, 34, 15], [8, 93, 34, 15], size=9.0)
-    mode = p.menu("Cursor moves", "Cursor", [64, 450, 56, 15], [42, 93, 54, 15], 1, items=["Insert", "Start"])
+    mode = p.menu("Cursor moves", "Cursor", [64, 450, 56, 15], [42, 93, 54, 15], 0, items=["Arrows", "Start"])
     to_js(mode, "cursormode", 64, 470)
     p.label("Step", [130, 450, 26, 15], [102, 93, 26, 15], size=9.0)
     step = p.menu("Cursor step", "Step", [156, 450, 60, 15], [128, 93, 64, 15], DEFAULT_STEP, items=CURSOR_STEPS)
