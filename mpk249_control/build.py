@@ -116,8 +116,10 @@ def build():
     p = Patcher()
 
     # Sound straight through: it is on the master for the set, not for audio.
-    pin = p.obj("plugin~ 2", 30, 30, nin=2, nout=2)
-    pout = p.obj("plugout~ 2", 30, 70, nin=2, nout=0)
+    # No arguments: plugin~'s are channel NUMBERS - "plugin~ 2" is the right
+    # channel alone, and with "plugout~ 2" everything came out of the right.
+    pin = p.obj("plugin~", 30, 30, nin=2, nout=2)
+    pout = p.obj("plugout~", 30, 70, nin=2, nout=0)
     p.boxes[-2]["box"]["outlettype"] = ["signal", "signal"]
     p.connect(pin, 0, pout, 0)
     p.connect(pin, 1, pout, 1)
