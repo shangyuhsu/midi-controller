@@ -1,0 +1,74 @@
+// Posts keystrokes and scroll-wheel events for mpk249-keys.js, one per line
+// read from stdin (JavaScript for Automation: osascript -l JavaScript):
+//
+//     key <keycode> <mods>     mods: cmd,alt,shift,ctrl joined by commas, or -
+//     hscroll <lines>          a horizontal scroll at the pointer
+//     ping                     answers "pong"
+//
+// Replies and errors go to stderr. A scroll goes to whatever is under the
+// pointer, as a mouse's would.
+
+ObjC.import("Foundation");
+ObjC.import("CoreGraphics");
+ObjC.import("ApplicationServices");
+
+var FLAGS = { cmd: 0x100000, alt: 0x80000, shift: 0x20000, ctrl: 0x40000 };
+
+function say(text) {
+    $.NSFileHandle.fileHandleWithStandardError.writeData($(text + "\n").dataUsingEncoding($.NSUTF8StringEncoding));
+}
+
+function key(code, mods) {
+    var flags = 0;
+
+    mods.split(",").forEach(function (m) { flags |= FLAGS[m] || 0; });
+
+    [true, false].forEach(function (down) {
+        var event = $.CGEventCreateKeyboardEvent(null, code, down);
+        $.CGEventSetFlags(event, flags);
+        $.CGEventPost($.kCGHIDEventTap, event);
+    });
+}
+
+function hscroll(lines) {
+    // Wheel 1 is vertical, wheel 2 horizontal.
+    var event = $.CGEventCreateScrollWheelEvent2(null, $.kCGScrollEventUnitLine, 2, 0, lines, 0);
+    $.CGEventPost($.kCGHIDEventTap, event);
+}
+
+function handle(line) {
+    var words = line.trim().split(/\s+/);
+
+    if (words[0] === "key" && words.length >= 2)
+        key(parseInt(words[1], 10), words[2] || "-");
+    else if (words[0] === "hscroll" && words.length >= 2)
+        hscroll(parseInt(words[1], 10));
+    else if (words[0] === "ping")
+        say("pong");
+    else if (words[0] !== "")
+        say("unknown: " + line);
+}
+
+function run() {
+    // Asks macOS to prompt for the permission if it has not been given.
+    var noPrompt = $.NSProcessInfo.processInfo.environment.objectForKey("MPK249_NO_PROMPT").js;   // a test's
+    var trusted = noPrompt ? $.AXIsProcessTrusted()
+                           : $.AXIsProcessTrustedWithOptions($({ AXTrustedCheckOptionPrompt: true }));
+    say(trusted ? "trusted yes" : "trusted no");
+
+    var input = $.NSFileHandle.fileHandleWithStandardInput;
+    var pending = "";
+
+    for (;;) {
+        var data = input.availableData;
+
+        // A bridged NSUInteger, not a JS number: === 0 never matched.
+        if (Number(data.length) === 0)
+            return;     // stdin closed: the device went away
+
+        pending += $.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding).js;
+        var lines = pending.split("\n");
+        pending = lines.pop();
+        lines.forEach(handle);
+    }
+}
