@@ -27,7 +27,7 @@
 
 autowatch = 1;
 inlets = 1;
-outlets = 2;        // 0: the status line   1: requests for mpk249-keys.js
+outlets = 3;        // 0: the status line   1: requests for mpk249-keys.js   2: the Step menu
 
 var SURFACE_TYPE = "MPK249_Flow";
 
@@ -66,19 +66,27 @@ var ENCODER_ACTIONS = {
 // The view knobs act once per this many detents, however fast they turn (the device's numboxes).
 var detentsPerStep = { cursor: 2, sideScroll: 1, zoom: 2 };
 
-/*  What the cursor knob moves (the device's Cursor menu):
-    0  the arrow keys, typed (mpk249-keys.js): the insert marker by the grid,
-       and the start marker with it. The API's own arrows (scroll_view) move
-       the insert marker only, leaving playback starting where it was. With
-       the loop brace selected, the arrows move the loop - Live's doing. The
-       default.
-    1  the start marker alone, by the device's Step (in beats).
+/*  What the cursor knob moves (the device's Cursor menu). Live's API can
+    nudge the insert marker by the grid (scroll_view, the arrows) but not read
+    or place it, and can place the start marker (current_song_time) but knows
+    nothing of the grid. So:
 
-    With Select held, either way: Shift and the arrows, growing the time selection.
+    0  Both: each in its own way, by the same distance - the insert marker a
+       grid step, the start marker by Step. Together as long as Step is the
+       grid: the grid pads move Step with the grid (halving or doubling it),
+       which holds for a fixed grid. One click in the arrangement lines the
+       two markers up. The default; types nothing.
+    1  Arrows: the arrow keys, typed (mpk249-keys.js) - Live moves both, by
+       its own grid. Only into Live's main window, never a plug-in's.
+    2  Start: the start marker alone, by Step.
+
+    With Select held: Shift and the arrows, growing the time selection.
+    With the loop brace selected, the arrows move the loop - Live's doing.
 */
 var cursorMode = 0;
-var CURSOR_STEPS = [0.25, 0.5, 1, 2, 4, 8, 16];
-var cursorStep = 1;
+var CURSOR_STEPS = [0.125, 0.25, 0.5, 1, 2, 4, 8, 16, 32];   // the device's Step menu, in beats
+var cursorStepIndex = 1;
+var cursorStep = CURSOR_STEPS[cursorStepIndex];
 
 var PARAM_STEP = 0.005;         // of a parameter's range, per knob step (mixer knobs keep their acceleration)
 var SIDE_SCROLL_LINES = 2;      // scroll lines per step
@@ -340,8 +348,8 @@ function runPad (action)
     {
         case "track":           selectTrack (action[1]); break;
         case "pluginWindow":    outlet (1, "key", "pluginWindow"); break;
-        case "gridCoarser":     outlet (1, "key", "gridCoarser"); break;
-        case "gridFiner":       outlet (1, "key", "gridFiner"); break;
+        case "gridCoarser":     outlet (1, "key", "gridCoarser"); followGrid (1); break;
+        case "gridFiner":       outlet (1, "key", "gridFiner"); followGrid (-1); break;
         case "metronome":       toggle (song (), "metronome"); break;
         case "mute":            toggleOnTrack ("mute"); break;
         case "solo":            toggleOnTrack ("solo"); break;
@@ -459,10 +467,26 @@ function runEncoder (action, delta)
     switch (action)
     {
         case "cursor":
-            if (selectHeld || cursorMode == 0)
-                typeArrow (delta > 0, selectHeld);
-            else
+            if (selectHeld)
+            {
+                if (cursorMode == 1)
+                    typeArrow (delta > 0, true);
+                else
+                    appView ().call ("scroll_view", delta > 0 ? 3 : 2, "Arranger", 1);
+            }
+            else if (cursorMode == 0)
+            {
+                appView ().call ("scroll_view", delta > 0 ? 3 : 2, "Arranger", 0);
                 moveStartMarker (delta);
+            }
+            else if (cursorMode == 1)
+            {
+                typeArrow (delta > 0, false);
+            }
+            else
+            {
+                moveStartMarker (delta);
+            }
             break;
 
         case "zoom":
@@ -550,17 +574,29 @@ function detents (name, n)
     }
 }
 
-// "cursormode <menu index>": 0 insert marker, 1 start marker
+// "cursormode <menu index>": 0 both, 1 arrows, 2 start
 function cursormode (index)
 {
-    cursorMode = index == 1 ? 1 : 0;
+    cursorMode = index >= 0 && index <= 2 ? index : 0;
 }
 
 // "cursorstep <menu index>"
 function cursorstep (index)
 {
     if (index >= 0 && index < CURSOR_STEPS.length)
+    {
+        cursorStepIndex = index;
         cursorStep = CURSOR_STEPS[index];
+    }
+}
+
+// A grid pad halves or doubles Live's grid: Step does the same, shown in its menu.
+function followGrid (direction)
+{
+    var index = Math.max (0, Math.min (CURSOR_STEPS.length - 1, cursorStepIndex + direction));
+
+    cursorstep (index);
+    outlet (2, index);
 }
 
 // "colour <pad> <code>", "lit <pad> <code>", "pressed <code>"

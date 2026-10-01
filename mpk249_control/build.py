@@ -44,8 +44,8 @@ PAD_LABELS = {13: "Track 1", 14: "Track 2", 15: "Track 3", 16: "Track 4",
 # Pads with a state to show - selected, or on - and so a lit colour.
 LIT_PADS = {1, 2, 3, 4, 9, 10, 11, 12, 13, 14, 15, 16}
 
-CURSOR_STEPS = ["1/16", "1/8", "1/4", "1/2", "1 bar", "2 bars", "4 bars"]   # mpk249.js's CURSOR_STEPS
-DEFAULT_STEP = 2
+CURSOR_STEPS = ["1/32", "1/16", "1/8", "1/4", "1/2", "1 bar", "2 bars", "4 bars", "8 bars"]   # mpk249.js's CURSOR_STEPS
+DEFAULT_STEP = 1
 DEFAULT_DETENTS = {"cursor": 2, "sideScroll": 1, "zoom": 2}
 
 
@@ -131,7 +131,7 @@ def build():
     p.connect(tb, 0, dl, 0)
     p.connect(dl, 0, ini, 0)
 
-    js = p.obj("js mpk249.js", 200, 200, nin=1, nout=2, w=110)
+    js = p.obj("js mpk249.js", 200, 200, nin=1, nout=3, w=110)
     p.connect(ini, 0, js, 0)
 
     node = p.obj("node.script mpk249-keys.js @autostart 1 @watch 1", 200, 260, nin=1, nout=2, w=330)
@@ -161,11 +161,12 @@ def build():
 
     # What the cursor knob moves, and the start marker's step.
     p.label("Cursor", [30, 450, 34, 15], [8, 93, 34, 15], size=9.0)
-    mode = p.menu("Cursor moves", "Cursor", [64, 450, 56, 15], [42, 93, 54, 15], 0, items=["Arrows", "Start"])
+    mode = p.menu("Cursor moves", "Cursor", [64, 450, 56, 15], [42, 93, 54, 15], 0, items=["Both", "Arrows", "Start"])
     to_js(mode, "cursormode", 64, 470)
     p.label("Step", [130, 450, 26, 15], [102, 93, 26, 15], size=9.0)
     step = p.menu("Cursor step", "Step", [156, 450, 60, 15], [128, 93, 64, 15], DEFAULT_STEP, items=CURSOR_STEPS)
     to_js(step, "cursorstep", 156, 470)
+    p.connect(js, 2, step, 0)      # the grid pads move Step with the grid
 
     # The view knobs: how many detents make one step.
     p.label("Detents per step", [30, 500, 100, 15], [8, 113, 100, 14], size=9.0)
