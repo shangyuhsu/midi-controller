@@ -806,6 +806,10 @@ function colourNow (pad)
     var action = PAD_ACTIONS[pad];
     var lit = isLit (pad);
 
+    // A track pad with no track to select is dark, whatever the mode.
+    if (action != null && action[0] == "track" && action[1] > trackIds.length)
+        return 0;
+
     if (action != null && action[0] == "track" && trackPadMode != "own")
     {
         var track = trackColours[action[1] - 1];
