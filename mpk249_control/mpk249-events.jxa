@@ -7,6 +7,13 @@
 //
 // Replies and errors go to stderr. A scroll goes to whatever is under the
 // pointer, as a mouse's would.
+//
+// A key goes to whichever window has the keyboard - and in a plug-in's
+// window an arrow key can change the patch, wiping the work in it. So a key
+// is typed only into Live's main window: if anything else has the keyboard,
+// the main window is raised first, and if that cannot be confirmed the key is
+// dropped ("skipped: ..."). Reading windows needs System Events (Automation
+// permission, asked once).
 
 ObjC.import("Foundation");
 ObjC.import("CoreGraphics");
@@ -31,7 +38,87 @@ function post(code, down, flags) {
     an app may read which modifiers are held from the keyboard's state rather
     than from the event.
 */
+var systemEvents = null;
+var confirmedAt = 0;            // when the main window was last seen to have the keyboard
+
+// Live's main window: its largest ordinary window - plug-in windows are smaller.
+function mainWindow(live) {
+    var best = null, bestArea = 0;
+
+    live.windows().forEach(function (w) {
+        try {
+            if (w.subrole() !== "AXStandardWindow")
+                return;
+
+            var size = w.size();
+            var area = size[0] * size[1];
+
+            if (area > bestArea) {
+                best = w;
+                bestArea = area;
+            }
+        } catch (e) {}
+    });
+
+    return best;
+}
+
+function sameWindow(a, b) {
+    return a.name() === b.name() && a.position().join() === b.position().join() && a.size().join() === b.size().join();
+}
+
+// "" when a key typed now reaches Live's main window, else why not.
+function keyboardInLiveMain() {
+    if (systemEvents === null)
+        systemEvents = Application("System Events");
+
+    var front = systemEvents.applicationProcesses.whose({ frontmost: true });
+
+    if (front.length === 0)
+        return "no app in front";
+
+    var live = front[0];
+
+    if (live.name() !== "Live")
+        return live.name() + " is in front, not Live";
+
+    var main = mainWindow(live);
+
+    if (main === null)
+        return "Live's main window was not found";
+
+    var focused = function () { return live.attributes.byName("AXFocusedWindow").value(); };
+
+    if (sameWindow(focused(), main))
+        return "";
+
+    // A plug-in window (or a dialog) has the keyboard: hand it to the main window.
+    var other = focused().name();
+    main.actions.byName("AXRaise").perform();
+    delay(0.08);
+
+    return sameWindow(focused(), main) ? "" : "'" + other + "' has the keyboard";
+}
+
 function key(code, mods) {
+    var now = Date.now();
+
+    // Checked at most every 250 ms: a knob turned fast types many arrows.
+    if (now - confirmedAt > 250) {
+        var why;
+
+        try { why = keyboardInLiveMain(); }
+        catch (e) { why = "could not read Live's windows (" + e + ")"; }
+
+        if (why !== "") {
+            say("skipped: " + why);
+            confirmedAt = 0;
+            return;
+        }
+
+        confirmedAt = now;
+    }
+
     var held = mods.split(",").filter(function (m) { return MODIFIER_KEYS[m] !== undefined; });
     var flags = 0;
 
