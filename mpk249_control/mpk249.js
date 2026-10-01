@@ -142,6 +142,16 @@ var metronomeOn = false;
 var trackState = { mute: false, solo: false, arm: false };
 var trackObservers = {};    // mute/solo/arm -> an observer moved to each selected track
 
+/*  The track pads (the device's Tracks menu):
+        selected  the selected one its track's colour; the rest off. The default.
+        all       each its track's colour; the selected one its lit colour
+        own       their own colours, the selected one its lit colour
+*/
+var TRACK_PAD_MODES = ["selected", "all", "own"];
+var trackPadMode = "selected";
+var trackColours = [];          // the MPK colour nearest each of the first 8 tracks' colour
+var trackColourObservers = [];
+
 function status (text)
 {
     outlet (0, "set", text);
@@ -260,7 +270,12 @@ function init ()
     for (var name in trackState)
         trackObservers[name] = trackStateObserver (name);
 
-    observeLive ("live_set", "visible_tracks", function (args) { trackIds = idsOf (args); });
+    trackColourObservers = [];
+
+    for (var t = 0; t < 8; ++t)
+        trackColourObservers.push (trackColourObserver (t));
+
+    observeLive ("live_set", "visible_tracks", function (args) { trackIds = idsOf (args); followTrackColours (); });
     observeLive ("live_set", "metronome", function (args) { metronomeOn = Number (args[0]) != 0; });
     observeLive ("live_set view", "selected_track", function (args)
     {
@@ -326,6 +341,77 @@ function followSelectedTrack ()
             observer.property = name;   // reports the value it has now, too
         }
     }
+}
+
+function trackColourObserver (index)
+{
+    var observer = new LiveAPI (function (args)
+    {
+        if (args[0] != "color")
+            return;
+
+        trackColours[index] = mpkColourFor (Number (args[1]));
+        scheduleColours ();     // eight arrive at once when the track list changes
+    }, "live_set");             // somewhere to start; followTrackColours moves it
+
+    observers.push (observer);
+    return observer;
+}
+
+// Points the colour observers at the first eight tracks - the ones the pads select.
+function followTrackColours ()
+{
+    for (var i = 0; i < trackColourObservers.length; ++i)
+    {
+        var observer = trackColourObservers[i];
+        observer.property = "";
+        trackColours[i] = -1;
+
+        if (i < trackIds.length)
+        {
+            observer.id = trackIds[i];
+            observer.property = "color";    // reports the colour it has now, too
+        }
+    }
+}
+
+/*  The MPK colour nearest a Live colour (0xRRGGBB) - Flow's own matching
+    (SurfaceProfile::mpk249ColourFor): a washed-out colour is grey, anything
+    else is compared at full brightness, by hue, against the pads' colours as
+    they look lit.
+*/
+var MPK_LOOKS = [[1, 0xff2020], [2, 0xff7010], [3, 0xffa500], [4, 0xffe800], [5, 0x20ff20],
+                 [6, 0x00ffa0], [7, 0x00ffff], [8, 0x40b0ff], [9, 0x2040ff], [10, 0x8020ff],
+                 [11, 0xff40c0], [12, 0xff1070], [13, 0xc090ff], [14, 0x90ff90], [15, 0xffa0d0]];
+
+function mpkColourFor (rgb)
+{
+    var r = ((rgb >> 16) & 255) / 255, g = ((rgb >> 8) & 255) / 255, b = (rgb & 255) / 255;
+    var high = Math.max (r, g, b), low = Math.min (r, g, b);
+
+    if (high < 0.05)
+        return 0;
+
+    if ((high - low) / high < 0.18)
+        return 16;
+
+    r /= high; g /= high; b /= high;
+    var best = 16, bestDistance = 1e9;
+
+    for (var i = 0; i < MPK_LOOKS.length; ++i)
+    {
+        var c = MPK_LOOKS[i][1];
+        var dr = r - ((c >> 16) & 255) / 255, dg = g - ((c >> 8) & 255) / 255, db = b - (c & 255) / 255;
+        var distance = dr * dr + dg * dg + db * db;
+
+        if (distance < bestDistance)
+        {
+            bestDistance = distance;
+            best = MPK_LOOKS[i][0];
+        }
+    }
+
+    return best;
 }
 
 // Reloaded by autowatch while already running in Live: take the controls again.
@@ -609,6 +695,16 @@ function sensitivity (name, n)
     }
 }
 
+// "trackpads <menu index>"
+function trackpads (index)
+{
+    if (index >= 0 && index < TRACK_PAD_MODES.length)
+    {
+        trackPadMode = TRACK_PAD_MODES[index];
+        scheduleColours ();
+    }
+}
+
 // "scrollstyle <menu index>", "zoomstyle <menu index>"
 function scrollstyle (index)
 {
@@ -703,6 +799,26 @@ function isLit (pad)
     return false;
 }
 
+// What a pad shows now: its own colour, its lit colour, or - a track pad - its track's.
+function colourNow (pad)
+{
+    var action = PAD_ACTIONS[pad];
+    var lit = isLit (pad);
+
+    if (action != null && action[0] == "track" && trackPadMode != "own")
+    {
+        var track = trackColours[action[1] - 1];
+        var hasTrack = track != null && track >= 0;
+
+        if (trackPadMode == "all")
+            return lit ? litColours[pad - 1] : (hasTrack ? track : padColours[pad - 1]);
+
+        return lit ? (hasTrack ? track : litColours[pad - 1]) : 0;
+    }
+
+    return lit ? litColours[pad - 1] : padColours[pad - 1];
+}
+
 function sendColours ()
 {
     if (surface == null)
@@ -713,7 +829,7 @@ function sendColours ()
 
     for (var pad = 1; pad <= 16; ++pad)
     {
-        unpressed.push (isLit (pad) ? litColours[pad - 1] : padColours[pad - 1]);
+        unpressed.push (colourNow (pad));
         held.push (pressedColour);
     }
 

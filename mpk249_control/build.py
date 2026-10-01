@@ -202,6 +202,12 @@ def build():
     pm = p.menu("Pressed colour", "Pressed", [174, 580, 56, 15], [120, 150, 72, 15], DEFAULT_PRESSED)
     to_js(pm, "pressed", 174, 600)
 
+    # The track pads: their tracks' colours, or their own (mpk249.js's TRACK_PAD_MODES).
+    p.label("Tracks", [250, 580, 34, 15], [198, 150, 32, 15], size=9.0)
+    tm = p.menu("Track pad colours", "Tracks", [284, 580, 80, 15], [230, 150, 70, 15], 0,
+                items=["Selected only", "Track colours", "Own colours"])
+    to_js(tm, "trackpads", 284, 600)
+
     # Bank A's colours, laid out as the pads are: pad 13 top left, pad 1 bottom left.
     # Each pad: its colour, and - for a pad that shows a state - its lit colour beside it.
     p.label("Pad colour  |  lit colour (selected / on)", [400, 330, 260, 16], [306, 3, 300, 15], size=9.0, bold=1)
