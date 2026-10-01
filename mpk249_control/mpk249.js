@@ -84,6 +84,11 @@ var selectedColour = 5;     // the selected track's pad, in place of its own col
 
 var lastSent = {};          // address -> the block last written there
 
+// Kept from Live's own notifications, so lighting a pad asks Live nothing:
+// every LiveAPI call is a round trip between Max and Live.
+var selectedTrackId = 0;
+var trackIds = [];
+
 function status (text)
 {
     outlet (0, "set", text);
@@ -188,20 +193,27 @@ function init ()
 
     status ("MPK249 Port A: " + ok + " of 24 controls.");
 
-    // The selected track's pad is lit: follow the selection, and the track list it indexes.
-    observeLive ("live_set view", "selected_track");
-    observeLive ("live_set", "visible_tracks");
-
     lastSent = {};
+    nudged = {};
+    appViewApi = null;
+
+    // The selected track's pad is lit: follow the selection, and the track list it indexes.
+    observeLive ("live_set", "visible_tracks", function (ids) { trackIds = ids; });
+    observeLive ("live_set view", "selected_track", function (ids) { selectedTrackId = ids.length ? ids[0] : 0; });
+
     sendColours ();
 }
 
-function observeLive (path, property)
+// Calls keep (ids) with the ids a property holds now and each time it changes, then relights.
+function observeLive (path, property, keep)
 {
     var observer = new LiveAPI (function (args)
     {
-        if (args[0] == property)
-            scheduleColours ();
+        if (args[0] != property)
+            return;
+
+        keep (idsOf (args.slice (1)));
+        sendColours ();     // unchanged blocks are not resent
     }, path);
 
     observer.property = property;
@@ -262,10 +274,14 @@ function runPad (action)
 
 function selectTrack (number)
 {
-    var tracks = idsOf (new LiveAPI ("live_set").get ("visible_tracks"));
+    if (number > trackIds.length)
+        return;
 
-    if (number <= tracks.length)
-        new LiveAPI ("live_set view").set ("selected_track", "id", tracks[number - 1]);
+    // Lit first: Live's own notice of the change comes a round trip later.
+    selectedTrackId = trackIds[number - 1];
+    sendColours ();
+
+    new LiveAPI ("live_set view").set ("selected_track", "id", selectedTrackId);
 }
 
 function toggle (api, property)
@@ -318,9 +334,14 @@ function steps (delta)
     return Math.min (Math.abs (delta), MAX_VIEW_STEPS);
 }
 
+var appViewApi = null;
+
 function runEncoder (action, delta)
 {
-    var appView = new LiveAPI ("live_app view");
+    if (appViewApi == null)
+        appViewApi = new LiveAPI ("live_app view");
+
+    var appView = appViewApi;
     var i;
 
     switch (action)
@@ -349,18 +370,29 @@ function runEncoder (action, delta)
     }
 }
 
+/*  The parameter at each path, kept with its range: a knob tick is then one
+    read and one write. A path through the selected track is looked up again
+    when the selection has changed since.
+*/
+var nudged = {};
+
 function nudge (path, delta)
 {
-    var parameter = new LiveAPI (path);
+    var entry = nudged[path];
 
-    if (parameter.id == 0)
-        return;
+    if (entry == null || entry.track != selectedTrackId)
+    {
+        var api = new LiveAPI (path);
 
-    var low = Number (parameter.get ("min"));
-    var high = Number (parameter.get ("max"));
-    var value = Number (parameter.get ("value")) + delta * PARAM_STEP * (high - low);
+        if (api.id == 0)
+            return;
 
-    parameter.set ("value", Math.max (low, Math.min (high, value)));
+        entry = nudged[path] = { api: api, track: selectedTrackId,
+                                 low: Number (api.get ("min")), high: Number (api.get ("max")) };
+    }
+
+    var value = Number (entry.api.get ("value")) + delta * PARAM_STEP * (entry.high - entry.low);
+    entry.api.set ("value", Math.max (entry.low, Math.min (entry.high, value)));
 }
 
 //==============================================================================
@@ -389,7 +421,7 @@ function selected (code)
     scheduleColours ();
 }
 
-// Batched: a preset recall sets every menu at once, a track change fires twice.
+// Batched: a preset recall sets every menu at once.
 var coloursTask = new Task (function () { sendColours (); });
 
 function scheduleColours ()
@@ -401,11 +433,8 @@ function scheduleColours ()
 // The pad that selects the selected track, or 0 when it is none of them.
 function selectedTrackPad ()
 {
-    var track = new LiveAPI ("live_set view selected_track");
-    var tracks = idsOf (new LiveAPI ("live_set").get ("visible_tracks"));
-
-    for (var i = 0; i < tracks.length; ++i)
-        if (Number (tracks[i]) == Number (track.id))
+    for (var i = 0; i < trackIds.length; ++i)
+        if (Number (trackIds[i]) == Number (selectedTrackId))
             for (var pad in PAD_ACTIONS)
                 if (PAD_ACTIONS[pad][0] == "track" && PAD_ACTIONS[pad][1] == i + 1)
                     return Number (pad);
