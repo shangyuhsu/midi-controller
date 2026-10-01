@@ -69,10 +69,14 @@ var detentsPerStep = { cursor: 2, sideScroll: 1, zoom: 2 };
 /*  What the cursor knob moves (the device's Cursor menu):
     0  the insert marker, a grid step at a time - the arrow keys. It is on the
        selected track, and follows it when a track pad changes track. But with
-       the loop brace selected, the arrow keys move the loop instead.
-    1  the start marker, by the device's Step (in beats) - never the loop.
+       the loop brace selected, the arrow keys move the loop instead - and it
+       is not where playback starts: Live's API cannot read where it is, so
+       the start marker cannot be brought to it.
+    1  the start marker - where playback starts - by the device's Step (in
+       beats). Not tied to a track, so it stays put across track changes.
+       The default.
 */
-var cursorMode = 0;
+var cursorMode = 1;
 var CURSOR_STEPS = [0.25, 0.5, 1, 2, 4, 8, 16];
 var cursorStep = 1;
 
