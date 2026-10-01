@@ -32,7 +32,7 @@ COLOURS = ["Off", "Red", "Orange", "Amber", "Yellow", "Green", "GrnBlue", "Aqua"
 
 # The menus' defaults, by pad - kept the same as mpk249.js's padColours / litColours.
 DEFAULT_COLOURS = [16, 16, 16, 16, 4, 15, 7, 15, 16, 16, 16, 16, 16, 16, 16, 16]
-DEFAULT_LIT = [4, 2, 8, 1, 0, 0, 0, 0, 5, 5, 5, 5, 5, 5, 5, 5]
+DEFAULT_LIT = [4, 2, 8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 DEFAULT_PRESSED = 16
 
 # What each pad does (mpk249.js's PAD_ACTIONS), shown under its menus.
@@ -205,7 +205,7 @@ def build():
     # The track pads: their tracks' colours, or their own (mpk249.js's TRACK_PAD_MODES).
     p.label("Tracks", [250, 580, 34, 15], [198, 150, 32, 15], size=9.0)
     tm = p.menu("Track pad colours", "Tracks", [284, 580, 80, 15], [230, 150, 70, 15], 0,
-                items=["Selected only", "Track colours", "Own colours"])
+                items=["Track colours", "Selected only", "Own colours"])
     to_js(tm, "trackpads", 284, 600)
 
     # Bank A's colours, laid out as the pads are: pad 13 top left, pad 1 bottom left.

@@ -128,7 +128,7 @@ var selectHeld = false;
 
 // Set by the device's menus (colour codes 0-16, as the MPK's manual lists them; 0 is off).
 var padColours = [16, 16, 16, 16, 4, 15, 7, 15, 16, 16, 16, 16, 16, 16, 16, 16];
-var litColours = [4, 2, 8, 1, 0, 0, 0, 0, 5, 5, 5, 5, 5, 5, 5, 5];
+var litColours = [4, 2, 8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 var pressedColour = 16;
 
 var lastSent = {};          // address -> the block last written there
@@ -143,12 +143,13 @@ var trackState = { mute: false, solo: false, arm: false };
 var trackObservers = {};    // mute/solo/arm -> an observer moved to each selected track
 
 /*  The track pads (the device's Tracks menu):
-        selected  the selected one its track's colour; the rest off. The default.
-        all       each its track's colour; the selected one its lit colour
+        all       each its track's colour; the selected one its lit colour -
+                  by default off, so the selected track is the dark one. The default.
+        selected  the selected one its track's colour; the rest off
         own       their own colours, the selected one its lit colour
 */
-var TRACK_PAD_MODES = ["selected", "all", "own"];
-var trackPadMode = "selected";
+var TRACK_PAD_MODES = ["all", "selected", "own"];
+var trackPadMode = "all";
 var trackColours = [];          // the MPK colour nearest each of the first 8 tracks' colour
 var trackColourObservers = [];
 
