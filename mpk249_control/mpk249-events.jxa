@@ -18,15 +18,34 @@ function say(text) {
     $.NSFileHandle.fileHandleWithStandardError.writeData($(text + "\n").dataUsingEncoding($.NSUTF8StringEncoding));
 }
 
+var MODIFIER_KEYS = { cmd: 55, alt: 58, shift: 56, ctrl: 59 };
+
+function post(code, down, flags) {
+    var event = $.CGEventCreateKeyboardEvent(null, code, down);
+    $.CGEventSetFlags(event, flags);
+    $.CGEventPost($.kCGHIDEventTap, event);
+}
+
+/*  Typed as a hand would: each modifier pressed, the key, then the modifiers
+    released. Flags alone on the key's event were not enough for Cmd-Alt-P -
+    an app may read which modifiers are held from the keyboard's state rather
+    than from the event.
+*/
 function key(code, mods) {
+    var held = mods.split(",").filter(function (m) { return MODIFIER_KEYS[m] !== undefined; });
     var flags = 0;
 
-    mods.split(",").forEach(function (m) { flags |= FLAGS[m] || 0; });
+    held.forEach(function (m) {
+        flags |= FLAGS[m];
+        post(MODIFIER_KEYS[m], true, flags);
+    });
 
-    [true, false].forEach(function (down) {
-        var event = $.CGEventCreateKeyboardEvent(null, code, down);
-        $.CGEventSetFlags(event, flags);
-        $.CGEventPost($.kCGHIDEventTap, event);
+    post(code, true, flags);
+    post(code, false, flags);
+
+    held.slice().reverse().forEach(function (m) {
+        flags &= ~FLAGS[m];
+        post(MODIFIER_KEYS[m], false, flags);
     });
 }
 

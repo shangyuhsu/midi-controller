@@ -18,7 +18,9 @@
     scrolling the arrangement sideways - goes to mpk249-keys.js (Node for
     Max), which has macOS post the keystroke or scroll for it.
 
-    Pads are Akai's numbering: 1 bottom left, 13 top left.
+    Pads are Akai's numbering: 1 bottom left, 13 top left. Each pad has a
+    colour, and the pads that show a state - a track pad its track selected,
+    the metronome, mute, solo and arm pads theirs on - a second, "lit" colour.
 
     Max's js is an old JavaScript: no let, const or arrow functions.
 */
@@ -33,7 +35,7 @@ var SURFACE_TYPE = "MPK249_Flow";
 // What each control does - the place to change things.
 
 var PAD_ACTIONS = {
-    // Top two rows: select tracks 1-8, reading order.
+    // Top two rows: select tracks 1-8, reading order. Lit: the selected track.
     13: ["track", 1], 14: ["track", 2], 15: ["track", 3], 16: ["track", 4],
      9: ["track", 5], 10: ["track", 6], 11: ["track", 7], 12: ["track", 8],
 
@@ -43,7 +45,7 @@ var PAD_ACTIONS = {
     7: ["gridCoarser"],     // Cmd-2: widen the grid
     8: ["gridFiner"],       // Cmd-1: narrow the grid
 
-    // Bottom row: the selected track, and the metronome.
+    // Bottom row: the metronome, and the selected track's. Lit: on.
     1: ["metronome"],
     2: ["mute"],
     3: ["solo"],
@@ -51,7 +53,7 @@ var PAD_ACTIONS = {
 };
 
 var ENCODER_ACTIONS = {
-    1: "cursor",            // the insert marker, a grid step per detent
+    1: "cursor",            // the insert marker (or start marker - the device's Cursor menu); Select held: the time selection
     2: "sideScroll",        // the arrangement, sideways
     3: "zoom",              // the arrangement, horizontally
     4: "volume",            // selected track
@@ -61,9 +63,21 @@ var ENCODER_ACTIONS = {
     8: "masterVolume"
 };
 
-var PARAM_STEP = 0.005;         // of a parameter's range, per knob step
-var MAX_VIEW_STEPS = 4;         // grid steps or zoom steps from one fast turn
-var SIDE_SCROLL_LINES = 2;      // scroll lines per knob step
+// The view knobs act once per this many detents, however fast they turn (the device's numboxes).
+var detentsPerStep = { cursor: 2, sideScroll: 1, zoom: 2 };
+
+/*  What the cursor knob moves (the device's Cursor menu):
+    0  the insert marker, a grid step at a time - the arrow keys. It is on the
+       selected track, and follows it when a track pad changes track. But with
+       the loop brace selected, the arrow keys move the loop instead.
+    1  the start marker, by the device's Step (in beats) - never the loop.
+*/
+var cursorMode = 0;
+var CURSOR_STEPS = [0.25, 0.5, 1, 2, 4, 8, 16];
+var cursorStep = 1;
+
+var PARAM_STEP = 0.005;         // of a parameter's range, per knob step (mixer knobs keep their acceleration)
+var SIDE_SCROLL_LINES = 2;      // scroll lines per step
 var SIDE_SCROLL_SIGN = -1;      // flip if turning right scrolls left
 var ZOOM_IN = 3, ZOOM_OUT = 2;  // zoom_view directions; swap if backwards
 
@@ -77,10 +91,10 @@ var surface = null;
 var observers = [];
 var selectHeld = false;
 
-// Set by the device's menus (colour codes 0-16, as the MPK's manual lists them).
-var padColours = [12, 12, 4, 2, 4, 15, 7, 15, 6, 15, 6, 7, 16, 16, 16, 16];
+// Set by the device's menus (colour codes 0-16, as the MPK's manual lists them; 0 is off).
+var padColours = [16, 16, 16, 16, 4, 15, 7, 15, 16, 16, 16, 16, 16, 16, 16, 16];
+var litColours = [4, 2, 8, 1, 0, 0, 0, 0, 5, 5, 5, 5, 5, 5, 5, 5];
 var pressedColour = 16;
-var selectedColour = 5;     // the selected track's pad, in place of its own colour
 
 var lastSent = {};          // address -> the block last written there
 
@@ -88,6 +102,10 @@ var lastSent = {};          // address -> the block last written there
 // every LiveAPI call is a round trip between Max and Live.
 var selectedTrackId = 0;
 var trackIds = [];
+var masterId = 0;
+var metronomeOn = false;
+var trackState = { mute: false, solo: false, arm: false };
+var trackObservers = {};    // mute/solo/arm -> an observer moved to each selected track
 
 function status (text)
 {
@@ -105,7 +123,7 @@ function idsOf (list)
 
     for (var i = 0; i + 1 < list.length; i += 2)
         if (list[i] == "id" && list[i + 1] != 0)
-            ids.push (list[i + 1]);
+            ids.push (Number (list[i + 1]));
 
     return ids;
 }
@@ -132,6 +150,7 @@ function release ()
         observers[i].property = "";
 
     observers = [];
+    trackObservers = {};
     selectHeld = false;
 }
 
@@ -179,7 +198,7 @@ function init ()
 
     if (surface == null)
     {
-        status ("No MPK249_Flow control surface. Set it in Preferences > Link/Tempo/MIDI, input and output MPK249 (Port A).");
+        status ("No MPK249_Flow control surface. Set it in Preferences > Link/Tempo/MIDI: input MPK249 (Port A), output MPK249 (Remote).");
         return;
     }
 
@@ -191,20 +210,34 @@ function init ()
     for (var e = 1; e <= 8; ++e)
         ok += watch ("Encoder_" + e, encoderHandler (e)) ? 1 : 0;
 
-    status ("MPK249 Port A: " + ok + " of 24 controls.");
+    // The transport's Loop button: Cmd-L, loop the selection - not the factory loop on/off.
+    ok += watch ("Loop", function (value) { if (value > 0) outlet (1, "key", "loopSelection"); }) ? 1 : 0;
+
+    status ("MPK249: " + ok + " of 25 controls.");
 
     lastSent = {};
     nudged = {};
     appViewApi = null;
+    songApi = null;
+    masterId = Number (new LiveAPI ("live_set master_track").id);
 
-    // The selected track's pad is lit: follow the selection, and the track list it indexes.
-    observeLive ("live_set", "visible_tracks", function (ids) { trackIds = ids; });
-    observeLive ("live_set view", "selected_track", function (ids) { selectedTrackId = ids.length ? ids[0] : 0; });
+    // What the lit pads show: the selected track (and its mute, solo, arm), the metronome.
+    for (var name in trackState)
+        trackObservers[name] = trackStateObserver (name);
+
+    observeLive ("live_set", "visible_tracks", function (args) { trackIds = idsOf (args); });
+    observeLive ("live_set", "metronome", function (args) { metronomeOn = Number (args[0]) != 0; });
+    observeLive ("live_set view", "selected_track", function (args)
+    {
+        var ids = idsOf (args);
+        selectedTrackId = ids.length ? ids[0] : 0;
+        followSelectedTrack ();
+    });
 
     sendColours ();
 }
 
-// Calls keep (ids) with the ids a property holds now and each time it changes, then relights.
+// Calls keep (values) with what a property holds now and each time it changes, then relights.
 function observeLive (path, property, keep)
 {
     var observer = new LiveAPI (function (args)
@@ -212,12 +245,52 @@ function observeLive (path, property, keep)
         if (args[0] != property)
             return;
 
-        keep (idsOf (args.slice (1)));
+        keep (args.slice (1));
         sendColours ();     // unchanged blocks are not resent
     }, path);
 
     observer.property = property;
     observers.push (observer);
+}
+
+function trackStateObserver (name)
+{
+    var observer = new LiveAPI (function (args)
+    {
+        if (args[0] != name)
+            return;
+
+        trackState[name] = Number (args[1]) != 0;
+        sendColours ();
+    }, "live_set");     // somewhere to start; followSelectedTrack moves it
+
+    observers.push (observer);
+    return observer;
+}
+
+/*  Points the mute/solo/arm observers at the newly selected track. The master
+    has none of the three, a return track or a group no arm: asking a track for
+    a property it lacks is an error, so those are simply not lit.
+*/
+function followSelectedTrack ()
+{
+    var isMaster = selectedTrackId == 0 || selectedTrackId == masterId;
+    var canArm = ! isMaster && Number (new LiveAPI ("id " + selectedTrackId).get ("can_be_armed")) != 0;
+
+    for (var name in trackObservers)
+    {
+        var observer = trackObservers[name];
+        var applies = ! isMaster && (name != "arm" || canArm);
+
+        observer.property = "";
+        trackState[name] = false;
+
+        if (applies)
+        {
+            observer.id = selectedTrackId;
+            observer.property = name;   // reports the value it has now, too
+        }
+    }
 }
 
 // Reloaded by autowatch while already running in Live: take the controls again.
@@ -265,7 +338,7 @@ function runPad (action)
         case "pluginWindow":    outlet (1, "key", "pluginWindow"); break;
         case "gridCoarser":     outlet (1, "key", "gridCoarser"); break;
         case "gridFiner":       outlet (1, "key", "gridFiner"); break;
-        case "metronome":       toggle (new LiveAPI ("live_set"), "metronome"); break;
+        case "metronome":       toggle (song (), "metronome"); break;
         case "mute":            toggleOnTrack ("mute"); break;
         case "solo":            toggleOnTrack ("solo"); break;
         case "arm":             toggleOnTrack ("arm"); break;
@@ -277,11 +350,26 @@ function selectTrack (number)
     if (number > trackIds.length)
         return;
 
+    var from = trackIds.indexOf (selectedTrackId);
+    var to = number - 1;
+    var target = trackIds[to];
+
     // Lit first: Live's own notice of the change comes a round trip later.
-    selectedTrackId = trackIds[number - 1];
+    selectedTrackId = target;
     sendColours ();
 
-    new LiveAPI ("live_set view").set ("selected_track", "id", selectedTrackId);
+    /*  Down or up the arrangement a track at a time, as the arrow keys do: that
+        takes the insert marker to the track at the same time position, which
+        setting the selected track does not. Only with the arrangement shown.
+    */
+    if (from >= 0 && from != to && Number (appView ().call ("is_view_visible", "Arranger")))
+        for (var i = 0; i < Math.abs (to - from); ++i)
+            appView ().call ("scroll_view", to > from ? 1 : 0, "Arranger", 0);
+
+    var view = new LiveAPI ("live_set view");
+
+    if (idsOf (view.get ("selected_track"))[0] != target)
+        view.set ("selected_track", "id", target);
 }
 
 function toggle (api, property)
@@ -289,33 +377,21 @@ function toggle (api, property)
     api.set (property, Number (api.get (property)) ? 0 : 1);
 }
 
-function selectedTrack ()
-{
-    var track = new LiveAPI ("live_set view selected_track");
-    return track.id != 0 ? track : null;
-}
-
-function isMaster (track)
-{
-    return track.id == new LiveAPI ("live_set master_track").id;
-}
-
 function toggleOnTrack (property)
 {
-    var track = selectedTrack ();
+    // The observers know what applies to the selected track; one is pointed there only if it does.
+    var observer = trackObservers[property];
 
-    // The master has no mute, solo or arm; a return track has no arm.
-    if (track == null || isMaster (track))
+    if (observer == null || observer.property != property)
         return;
 
-    if (property == "arm" && ! Number (track.get ("can_be_armed")))
-        return;
-
-    toggle (track, property);
+    toggle (new LiveAPI ("id " + selectedTrackId), property);
 }
 
 //==============================================================================
 // Knobs
+
+var accumulated = {};       // view knob -> detents turned toward its next step
 
 function encoderHandler (encoder)
 {
@@ -323,38 +399,69 @@ function encoderHandler (encoder)
     {
         // Inc/Dec 2: two's complement, with acceleration - right 1..8, left 127..120.
         var delta = value < 64 ? value : value - 128;
+        var action = ENCODER_ACTIONS[encoder];
 
-        if (delta != 0)
-            runEncoder (ENCODER_ACTIONS[encoder], delta);
+        if (delta == 0)
+            return;
+
+        if (detentsPerStep[action] == null)
+        {
+            runEncoder (action, delta);
+            return;
+        }
+
+        // A view knob counts detents, not speed: one message is one detent.
+        var direction = delta > 0 ? 1 : -1;
+        var sofar = accumulated[action] || 0;
+
+        if (sofar * direction < 0)
+            sofar = 0;              // turned back: start over
+
+        sofar += direction;
+
+        if (Math.abs (sofar) >= Math.max (1, detentsPerStep[action]))
+        {
+            sofar = 0;
+            runEncoder (action, direction);
+        }
+
+        accumulated[action] = sofar;
     };
 }
 
-function steps (delta)
-{
-    return Math.min (Math.abs (delta), MAX_VIEW_STEPS);
-}
-
 var appViewApi = null;
+var songApi = null;
 
-function runEncoder (action, delta)
+function appView ()
 {
     if (appViewApi == null)
         appViewApi = new LiveAPI ("live_app view");
 
-    var appView = appViewApi;
-    var i;
+    return appViewApi;
+}
 
+function song ()
+{
+    if (songApi == null)
+        songApi = new LiveAPI ("live_set");
+
+    return songApi;
+}
+
+function runEncoder (action, delta)
+{
     switch (action)
     {
-        // Like the arrow keys - and like Shift with them while Select is held.
+        // The arrow keys - with Shift while Select is held, growing the time selection.
         case "cursor":
-            for (i = 0; i < steps (delta); ++i)
-                appView.call ("scroll_view", delta > 0 ? 3 : 2, "Arranger", selectHeld ? 1 : 0);
+            if (selectHeld || cursorMode == 0)
+                appView ().call ("scroll_view", delta > 0 ? 3 : 2, "Arranger", selectHeld ? 1 : 0);
+            else
+                moveStartMarker (delta);
             break;
 
         case "zoom":
-            for (i = 0; i < steps (delta); ++i)
-                appView.call ("zoom_view", delta > 0 ? ZOOM_IN : ZOOM_OUT, "Arranger", 0);
+            appView ().call ("zoom_view", delta > 0 ? ZOOM_IN : ZOOM_OUT, "Arranger", 0);
             break;
 
         // Live's API cannot scroll a view without moving the selection.
@@ -368,6 +475,17 @@ function runEncoder (action, delta)
         case "cueVolume":    nudge ("live_set master_track mixer_device cue_volume", delta); break;
         case "masterVolume": nudge ("live_set master_track mixer_device volume", delta); break;
     }
+}
+
+/*  The start marker, set directly - not with scroll_view, which is the arrow
+    keys: with the loop brace selected those move the loop instead.
+*/
+function moveStartMarker (direction)
+{
+    var now = Number (song ().get ("current_song_time"));
+    var next = Math.round ((now + direction * cursorStep) / cursorStep) * cursorStep;
+
+    song ().set ("current_song_time", Math.max (0, next));
 }
 
 /*  The parameter at each path, kept with its range: a knob tick is then one
@@ -396,15 +514,46 @@ function nudge (path, delta)
 }
 
 //==============================================================================
-// Pad colours
+// From the device's controls
 
-// From the device's menus: "colour <pad> <code>", "pressed <code>".
-// From the device's menus: "colour <pad> <code>", "pressed <code>", "selected <code>".
+// "detents cursor|sideScroll|zoom <n>"
+function detents (name, n)
+{
+    if (detentsPerStep[name] != null)
+    {
+        detentsPerStep[name] = Math.max (1, Math.floor (n));
+        accumulated[name] = 0;
+    }
+}
+
+// "cursormode <menu index>": 0 insert marker, 1 start marker
+function cursormode (index)
+{
+    cursorMode = index == 1 ? 1 : 0;
+}
+
+// "cursorstep <menu index>"
+function cursorstep (index)
+{
+    if (index >= 0 && index < CURSOR_STEPS.length)
+        cursorStep = CURSOR_STEPS[index];
+}
+
+// "colour <pad> <code>", "lit <pad> <code>", "pressed <code>"
 function colour (pad, code)
 {
     if (pad >= 1 && pad <= 16)
     {
         padColours[pad - 1] = code;
+        scheduleColours ();
+    }
+}
+
+function lit (pad, code)
+{
+    if (pad >= 1 && pad <= 16)
+    {
+        litColours[pad - 1] = code;
         scheduleColours ();
     }
 }
@@ -415,11 +564,8 @@ function pressed (code)
     scheduleColours ();
 }
 
-function selected (code)
-{
-    selectedColour = code;
-    scheduleColours ();
-}
+//==============================================================================
+// Pad colours
 
 // Batched: a preset recall sets every menu at once.
 var coloursTask = new Task (function () { sendColours (); });
@@ -430,16 +576,23 @@ function scheduleColours ()
     coloursTask.schedule (30);
 }
 
-// The pad that selects the selected track, or 0 when it is none of them.
-function selectedTrackPad ()
+function isLit (pad)
 {
-    for (var i = 0; i < trackIds.length; ++i)
-        if (Number (trackIds[i]) == Number (selectedTrackId))
-            for (var pad in PAD_ACTIONS)
-                if (PAD_ACTIONS[pad][0] == "track" && PAD_ACTIONS[pad][1] == i + 1)
-                    return Number (pad);
+    var action = PAD_ACTIONS[pad];
 
-    return 0;
+    if (action == null)
+        return false;
+
+    switch (action[0])
+    {
+        case "track":       return action[1] <= trackIds.length && trackIds[action[1] - 1] == selectedTrackId;
+        case "metronome":   return metronomeOn;
+        case "mute":
+        case "solo":
+        case "arm":         return trackState[action[0]];
+    }
+
+    return false;
 }
 
 function sendColours ()
@@ -447,16 +600,14 @@ function sendColours ()
     if (surface == null)
         return;
 
-    var unpressed = padColours.slice ();
+    var unpressed = [];
     var held = [];
 
-    var lit = selectedTrackPad ();
-
-    if (lit > 0)
-        unpressed[lit - 1] = selectedColour;
-
-    for (var i = 0; i < 16; ++i)
+    for (var pad = 1; pad <= 16; ++pad)
+    {
+        unpressed.push (isLit (pad) ? litColours[pad - 1] : padColours[pad - 1]);
         held.push (pressedColour);
+    }
 
     sendColourBlock (COLOUR_ADDRESS_OFF, unpressed);
     sendColourBlock (COLOUR_ADDRESS_ON, held);

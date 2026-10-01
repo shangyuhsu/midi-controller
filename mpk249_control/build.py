@@ -18,27 +18,35 @@ import json, os, struct, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-DEV_W = 430
+DEV_W = 628
 INSTALL = os.path.expanduser(
     "~/Music/Ableton/User Library/Presets/Audio Effects/Max Audio Effect/MPK249 Control")
 REMOTE_SCRIPTS = "/Applications/Ableton Live 11 Suite.app/Contents/App-Resources/MIDI Remote Scripts"
 SCRIPTS = ["mpk249.js", "mpk249-keys.js", "mpk249-events.jxa"]
 
-# The MPK's pad colours, in the order of their codes (its manual's list).
-COLOURS = ["Off", "Red", "Orange", "Amber", "Yellow", "Green", "Green Blue", "Aqua",
-           "Light Blue", "Blue", "Purple", "Pink", "Hot Pink", "Light Purple",
-           "Light Green", "Light Pink", "Grey"]
+# The MPK's pad colours, in the order of their codes (its manual's list), named short
+# enough for two menus to a pad. Off - unlit - is a colour like any other.
+COLOURS = ["Off", "Red", "Orange", "Amber", "Yellow", "Green", "GrnBlue", "Aqua",
+           "LtBlue", "Blue", "Purple", "Pink", "HotPink", "LtPurple",
+           "LtGreen", "LtPink", "Grey"]
 
-# What bank A had in the preset when this was written - the menus' defaults.
-DEFAULT_COLOURS = [12, 12, 4, 2, 4, 15, 7, 15, 6, 15, 6, 7, 16, 16, 16, 16]
+# The menus' defaults, by pad - kept the same as mpk249.js's padColours / litColours.
+DEFAULT_COLOURS = [16, 16, 16, 16, 4, 15, 7, 15, 16, 16, 16, 16, 16, 16, 16, 16]
+DEFAULT_LIT = [4, 2, 8, 1, 0, 0, 0, 0, 5, 5, 5, 5, 5, 5, 5, 5]
 DEFAULT_PRESSED = 16
-DEFAULT_SELECTED = 5    # Green
 
-# What each pad does (mpk249.js's PAD_ACTIONS), shown under its menu.
+# What each pad does (mpk249.js's PAD_ACTIONS), shown under its menus.
 PAD_LABELS = {13: "Track 1", 14: "Track 2", 15: "Track 3", 16: "Track 4",
               9: "Track 5", 10: "Track 6", 11: "Track 7", 12: "Track 8",
               5: "Plug-in", 6: "Select", 7: "Grid -", 8: "Grid +",
               1: "Metronome", 2: "Mute", 3: "Solo", 4: "Arm"}
+
+# Pads with a state to show - selected, or on - and so a lit colour.
+LIT_PADS = {1, 2, 3, 4, 9, 10, 11, 12, 13, 14, 15, 16}
+
+CURSOR_STEPS = ["1/16", "1/8", "1/4", "1/2", "1 bar", "2 bars", "4 bars"]   # mpk249.js's CURSOR_STEPS
+DEFAULT_STEP = 2
+DEFAULT_DETENTS = {"cursor": 2, "sideScroll": 1, "zoom": 2}
 
 
 class Patcher:
@@ -72,15 +80,28 @@ class Patcher:
         return self.shown({"maxclass": "live.comment", "text": text, "numinlets": 1, "numoutlets": 0,
                            "fontsize": size, "fontface": bold}, rect, prect)
 
-    def menu(self, longname, shortname, rect, prect, initial):
+    def menu(self, longname, shortname, rect, prect, initial, items=COLOURS):
         """A live.menu that is a Live parameter: saved with the set, recalled by presets."""
         i = self.shown({"maxclass": "live.menu", "numinlets": 1, "numoutlets": 3,
                         "outlettype": ["", "", "float"], "parameter_enable": 1, "varname": longname,
                         "fontsize": 9.0,
                         "saved_attribute_attributes": {"valueof": {
                             "parameter_longname": longname, "parameter_shortname": shortname,
-                            "parameter_type": 2, "parameter_enum": COLOURS,
-                            "parameter_mmax": len(COLOURS) - 1,
+                            "parameter_type": 2, "parameter_enum": items,
+                            "parameter_mmax": len(items) - 1,
+                            "parameter_initial": [initial], "parameter_initial_enable": 1,
+                            "parameter_invisible": 1}}},
+                       rect, prect)
+        self.params[i] = [longname, shortname, 0]
+        return i
+
+    def numbox(self, longname, shortname, rect, prect, initial, low, high):
+        i = self.shown({"maxclass": "live.numbox", "numinlets": 1, "numoutlets": 2,
+                        "outlettype": ["", "float"], "parameter_enable": 1, "varname": longname,
+                        "fontsize": 9.0,
+                        "saved_attribute_attributes": {"valueof": {
+                            "parameter_longname": longname, "parameter_shortname": shortname,
+                            "parameter_type": 1, "parameter_mmin": low, "parameter_mmax": high,
                             "parameter_initial": [initial], "parameter_initial_enable": 1,
                             "parameter_invisible": 1}}},
                        rect, prect)
@@ -119,59 +140,78 @@ def build():
     p.label("MPK249 Control", [30, 330, 120, 18], [8, 4, 160, 18], size=11.0, bold=1)
 
     status = p.shown({"maxclass": "comment", "text": "Waiting for Live...", "numinlets": 1, "numoutlets": 0,
-                      "fontsize": 9.5, "linecount": 4, "textcolor": [0.8, 0.8, 0.8, 1.0]},
-                     [30, 360, 190, 60], [8, 24, 190, 60])
+                      "fontsize": 9.0, "linecount": 3, "textcolor": [0.8, 0.8, 0.8, 1.0]},
+                     [30, 360, 190, 44], [8, 22, 192, 44])
     p.connect(js, 0, status, 0)
 
     # The key helper's own line: whether macOS lets it post events.
     route = p.obj("route status", 200, 300, nin=2, nout=2)
     pset = p.obj("prepend set", 200, 330, nin=1, nout=1)
     keys_status = p.shown({"maxclass": "comment", "text": "", "numinlets": 1, "numoutlets": 0,
-                           "fontsize": 9.5, "linecount": 2, "textcolor": [0.8, 0.8, 0.8, 1.0]},
-                          [30, 430, 190, 34], [8, 88, 190, 34])
+                           "fontsize": 9.0, "linecount": 2, "textcolor": [0.8, 0.8, 0.8, 1.0]},
+                          [30, 410, 190, 24], [8, 66, 192, 24])
     p.connect(node, 0, route, 0)
     p.connect(route, 0, pset, 0)
     p.connect(pset, 0, keys_status, 0)
 
+    def to_js(widget, message, x, y):
+        pre = p.obj("prepend " + message, x, y, nin=1, nout=1, w=150)
+        p.connect(widget, 0, pre, 0)
+        p.connect(pre, 0, js, 0)
+
+    # What the cursor knob moves, and the start marker's step.
+    p.label("Cursor", [30, 450, 34, 15], [8, 93, 34, 15], size=9.0)
+    mode = p.menu("Cursor moves", "Cursor", [64, 450, 56, 15], [42, 93, 54, 15], 0, items=["Insert", "Start"])
+    to_js(mode, "cursormode", 64, 470)
+    p.label("Step", [130, 450, 26, 15], [102, 93, 26, 15], size=9.0)
+    step = p.menu("Cursor step", "Step", [156, 450, 60, 15], [128, 93, 64, 15], DEFAULT_STEP, items=CURSOR_STEPS)
+    to_js(step, "cursorstep", 156, 470)
+
+    # The view knobs: how many detents make one step.
+    p.label("Detents per step", [30, 500, 100, 15], [8, 113, 100, 14], size=9.0)
+    for n, (name, text) in enumerate([("cursor", "Cursor"), ("sideScroll", "Scroll"), ("zoom", "Zoom")]):
+        px = 8 + n * 64
+        p.label(text, [30 + n * 90, 520, 36, 15], [px, 129, 36, 15], size=9.0)
+        nb = p.numbox(text + " detents", text, [66 + n * 90, 520, 28, 15], [px + 34, 129, 26, 15],
+                      DEFAULT_DETENTS[name], 1, 16)
+        to_js(nb, "detents " + name, 66 + n * 90, 540)
+
     rescan = p.shown({"maxclass": "live.text", "text": "Rescan", "mode": 0,
                       "numinlets": 1, "numoutlets": 2, "outlettype": ["", ""],
-                      "parameter_enable": 1, "fontsize": 9.5,
+                      "parameter_enable": 1, "fontsize": 9.0,
                       "saved_attribute_attributes": {"valueof": {
                           "parameter_longname": "Rescan", "parameter_shortname": "Rescan",
                           "parameter_type": 2, "parameter_enum": ["off", "on"], "parameter_mmax": 1,
                           "parameter_invisible": 2}}},
-                     [30, 480, 70, 20], [8, 130, 70, 20])
+                     [30, 580, 60, 18], [8, 149, 60, 16])
     p.params[rescan] = ["Rescan", "Rescan", 0]
     p.connect(rescan, 0, ini, 0)
 
+    # A pad held down: one colour for all.
+    p.label("Pressed", [130, 580, 44, 15], [76, 150, 44, 15], size=9.0)
+    pm = p.menu("Pressed colour", "Pressed", [174, 580, 56, 15], [120, 150, 72, 15], DEFAULT_PRESSED)
+    to_js(pm, "pressed", 174, 600)
+
     # Bank A's colours, laid out as the pads are: pad 13 top left, pad 1 bottom left.
-    p.label("Pad colours (bank A)", [400, 330, 200, 18], [206, 4, 200, 16], size=9.5, bold=1)
-    cell_w, cell_h, x0, y0 = 54, 30, 206, 20
+    # Each pad: its colour, and - for a pad that shows a state - its lit colour beside it.
+    p.label("Pad colour  |  lit colour (selected / on)", [400, 330, 260, 16], [206, 3, 300, 15], size=9.0, bold=1)
+    cell_w, cell_h, menu_w, x0, y0 = 104, 36, 50, 206, 20
     rows = [[13, 14, 15, 16], [9, 10, 11, 12], [5, 6, 7, 8], [1, 2, 3, 4]]
 
     for r, row in enumerate(rows):
         for c, pad in enumerate(row):
             px, py = x0 + c * cell_w, y0 + r * cell_h
-            m = p.menu("Pad %d colour" % pad, "Pad %d" % pad,
-                       [400 + c * 80, 360 + r * 60, 52, 16], [px, py, cell_w - 2, 15],
+            bx, by = 400 + c * 230, 360 + r * 80
+            m = p.menu("Pad %d colour" % pad, "Pad %d" % pad, [bx, by, menu_w, 15], [px, py, menu_w, 15],
                        DEFAULT_COLOURS[pad - 1])
-            p.label(PAD_LABELS.get(pad, ""), [400 + c * 80, 378 + r * 60, 60, 14], [px, py + 14, cell_w - 2, 14], size=8.0)
-            pre = p.obj("prepend colour %d" % pad, 400 + c * 80, 395 + r * 60, nin=1, nout=1, w=110)
-            p.connect(m, 0, pre, 0)
-            p.connect(pre, 0, js, 0)
+            to_js(m, "colour %d" % pad, bx, by + 40)
 
-    # A pad held down, and the selected track's pad - each one colour for all.
-    py = y0 + 4 * cell_h + 2
+            if pad in LIT_PADS:
+                lm = p.menu("Pad %d lit colour" % pad, "Pad %d lit" % pad, [bx + 110, by, menu_w, 15],
+                            [px + menu_w + 2, py, menu_w, 15], DEFAULT_LIT[pad - 1])
+                to_js(lm, "lit %d" % pad, bx + 110, by + 40)
 
-    for n, (text, longname, default, message) in enumerate(
-            [("Pressed", "Pressed colour", DEFAULT_PRESSED, "pressed"),
-             ("Selected", "Selected track colour", DEFAULT_SELECTED, "selected")]):
-        px = x0 + n * 108
-        p.label(text, [400 + n * 200, 620, 60, 16], [px, py, 44, 15], size=9.0)
-        m = p.menu(longname, text, [460 + n * 200, 620, 80, 16], [px + 44, py, 62, 15], default)
-        pre = p.obj("prepend " + message, 460 + n * 200, 650, nin=1, nout=1, w=110)
-        p.connect(m, 0, pre, 0)
-        p.connect(pre, 0, js, 0)
+            p.label(PAD_LABELS.get(pad, ""), [bx, by + 18, 100, 13], [px, py + 16, cell_w - 4, 13], size=8.0)
 
     params = dict(p.params)
     params["inherited_shortname"] = 1

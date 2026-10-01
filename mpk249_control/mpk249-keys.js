@@ -21,6 +21,7 @@ const KEYS = {
     gridFiner:    { code: 18, mods: "cmd" },        // Cmd-1  Narrow Grid
     gridCoarser:  { code: 19, mods: "cmd" },        // Cmd-2  Widen Grid
     pluginWindow: { code: 35, mods: "cmd,alt" },    // Cmd-Alt-P  Show/Hide Plug-In Windows
+    loopSelection: { code: 37, mods: "cmd" },       // Cmd-L  Loop Selection
 };
 
 let helper = null;

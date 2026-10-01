@@ -5,8 +5,8 @@ Select it in Live's Preferences > Link/Tempo/MIDI as a Control Surface with
 "MPK249 (Port A)" as its input and output.
 
 What it does itself is only what the factory script did - transport, the
-faders on the first eight tracks' volumes, the switches arming them. Port A's
-16 pads and 8 knobs it only claims: every message from them is forwarded to
+faders on the first eight tracks' volumes, the switches arming them - less the
+Loop button. That, and Port A's 16 pads and 8 knobs, it only claims: every message from them is forwarded to
 the script, so Live never passes it on to a track - no stray notes in a
 plugin, none recorded into a clip. What they DO lives in the Max device
 (mpk249_control/), which grabs them by name and observes their values, so it
@@ -68,13 +68,15 @@ class MPK249_Flow(ControlSurface):
 
     def _create_factory_controls(self):
         midimap = MidiMap()
+
+        # The Loop button is the device's (Cmd-L, loop the selection), claimed like the pads.
+        self._loop_button = midimap["Loop"]
         transport = TransportComponent(name="Transport", is_enabled=False,
                                        layer=Layer(play_button=midimap["Play"],
                                                    record_button=midimap["Record"],
                                                    stop_button=midimap["Stop"],
                                                    seek_forward_button=midimap["Forward"],
-                                                   seek_backward_button=midimap["Backward"],
-                                                   loop_button=midimap["Loop"]))
+                                                   seek_backward_button=midimap["Backward"]))
         transport.set_enabled(True)
         mixer = MixerComponent(len(midimap["Sliders"]), name="Mixer", is_enabled=False,
                                layer=Layer(volume_controls=midimap["Sliders"],
@@ -99,6 +101,8 @@ class MPK249_Flow(ControlSurface):
             encoder = EncoderElement(MIDI_CC_TYPE, ENCODER_CHANNEL, ENCODER_FIRST_CC + n - 1,
                                      Live.MidiMap.MapMode.relative_two_compliment, name="Encoder_%d" % n)
             self._device_controls.append(encoder)
+
+        self._device_controls.append(self._loop_button)
 
         for control in self._device_controls:
             control.add_value_listener(self._swallow)
