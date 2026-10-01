@@ -80,18 +80,19 @@ var VIEW_KNOBS = { cursor: true, sideScroll: true, zoom: true };
     nothing of the grid. So:
 
     0  Both: each in its own way, by the same distance - the insert marker a
-       grid step, the start marker by Step. Together as long as Step is the
-       grid: the grid pads move Step with the grid (halving or doubling it),
-       which holds for a fixed grid. One click in the arrangement lines the
-       two markers up. The default; types nothing.
-    1  Arrows: the arrow keys, typed (mpk249-keys.js) - Live moves both, by
-       its own grid. Only into Live's main window, never a plug-in's.
+       grid step, the start marker by Step. Together only while Step is the
+       grid, which Live's API cannot read (only a clip's grid is in it): the
+       grid pads move Step with the grid, which holds for a fixed grid. Types
+       nothing.
+    1  Arrows: the arrow keys, typed (mpk249-keys.js) - Live moves both by its
+       own grid, fixed or adaptive, as the grid pads change it. Only into
+       Live's main window, never a plug-in's. The default.
     2  Start: the start marker alone, by Step.
 
     With Select held: Shift and the arrows, growing the time selection.
     With the loop brace selected, the arrows move the loop - Live's doing.
 */
-var cursorMode = 0;
+var cursorMode = 1;
 var CURSOR_STEPS = [0.125, 0.25, 0.5, 1, 2, 4, 8, 16, 32];   // the device's Step menu, in beats
 var cursorStepIndex = 1;
 var cursorStep = CURSOR_STEPS[cursorStepIndex];
