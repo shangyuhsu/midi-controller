@@ -89,7 +89,15 @@ var cursorStepIndex = 1;
 var cursorStep = CURSOR_STEPS[cursorStepIndex];
 
 var PARAM_STEP = 0.005;         // of a parameter's range, per knob step (mixer knobs keep their acceleration)
-var SIDE_SCROLL_LINES = 2;      // scroll lines per step
+/*  The side scroll is a mouse scroll at the pointer: in lines or pixels, not
+    bars - how far a bar is on screen depends on the zoom, which Live's API
+    does not tell. The device's Scroll menu picks the kind of event (Live
+    ignored plain horizontal lines) and its Amount the distance per step, to
+    be set so a step is a bar at the zoom in use.
+*/
+var SCROLL_STYLES = ["pixel", "shift", "line"];     // the device's Scroll menu
+var scrollStyle = "pixel";
+var scrollAmount = 40;
 var SIDE_SCROLL_SIGN = -1;      // flip if turning right scrolls left
 var ZOOM_IN = 3, ZOOM_OUT = 2;  // zoom_view directions; swap if backwards
 
@@ -495,7 +503,7 @@ function runEncoder (action, delta)
 
         // Live's API cannot scroll a view without moving the selection.
         case "sideScroll":
-            outlet (1, "hscroll", SIDE_SCROLL_SIGN * delta * SIDE_SCROLL_LINES);
+            outlet (1, "hscroll", SIDE_SCROLL_SIGN * delta * scrollAmount, scrollStyle);
             break;
 
         case "volume":       nudge ("live_set view selected_track mixer_device volume", delta); break;
@@ -572,6 +580,18 @@ function detents (name, n)
         detentsPerStep[name] = Math.max (1, Math.floor (n));
         accumulated[name] = 0;
     }
+}
+
+// "scrollstyle <menu index>", "scrollamount <n>"
+function scrollstyle (index)
+{
+    if (index >= 0 && index < SCROLL_STYLES.length)
+        scrollStyle = SCROLL_STYLES[index];
+}
+
+function scrollamount (n)
+{
+    scrollAmount = Math.max (1, Math.floor (n));
 }
 
 // "cursormode <menu index>": 0 both, 1 arrows, 2 start

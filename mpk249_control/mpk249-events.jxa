@@ -2,7 +2,10 @@
 // read from stdin (JavaScript for Automation: osascript -l JavaScript):
 //
 //     key <keycode> <mods>     mods: cmd,alt,shift,ctrl joined by commas, or -
-//     hscroll <lines>          a horizontal scroll at the pointer
+//     hscroll <amount> <style> a horizontal scroll at the pointer - style:
+//                                line   horizontal wheel, in lines
+//                                pixel  horizontal, in pixels, as a trackpad sends it
+//                                shift  the vertical wheel with Shift held, in lines
 //     ping                     answers "pong"
 //
 // Replies and errors go to stderr. A scroll goes to whatever is under the
@@ -136,9 +139,22 @@ function key(code, mods) {
     });
 }
 
-function hscroll(lines) {
+var SCROLL_IS_CONTINUOUS = 88;      // kCGScrollWheelEventIsContinuous
+
+function hscroll(amount, style) {
+    var event;
+
     // Wheel 1 is vertical, wheel 2 horizontal.
-    var event = $.CGEventCreateScrollWheelEvent2(null, $.kCGScrollEventUnitLine, 2, 0, lines, 0);
+    if (style === "pixel") {
+        event = $.CGEventCreateScrollWheelEvent2(null, $.kCGScrollEventUnitPixel, 2, 0, amount, 0);
+        $.CGEventSetIntegerValueField(event, SCROLL_IS_CONTINUOUS, 1);
+    } else if (style === "shift") {
+        event = $.CGEventCreateScrollWheelEvent2(null, $.kCGScrollEventUnitLine, 1, amount, 0, 0);
+        $.CGEventSetFlags(event, FLAGS.shift);
+    } else {
+        event = $.CGEventCreateScrollWheelEvent2(null, $.kCGScrollEventUnitLine, 2, 0, amount, 0);
+    }
+
     $.CGEventPost($.kCGHIDEventTap, event);
 }
 
@@ -148,7 +164,7 @@ function handle(line) {
     if (words[0] === "key" && words.length >= 2)
         key(parseInt(words[1], 10), words[2] || "-");
     else if (words[0] === "hscroll" && words.length >= 2)
-        hscroll(parseInt(words[1], 10));
+        hscroll(parseInt(words[1], 10), words[2] || "line");
     else if (words[0] === "ping")
         say("pong");
     else if (words[0] !== "")

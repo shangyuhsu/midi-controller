@@ -93,11 +93,9 @@ maxApi.addHandler("key", (name) => {
 // The device's own lines, into the same log.
 maxApi.addHandler("log", (...words) => log("device: " + words.join(" ")));
 
-maxApi.addHandler("hscroll", (lines) => {
-    log("hscroll request: " + lines);
-
-    if (lines)
-        send("hscroll " + Math.round(lines));
+maxApi.addHandler("hscroll", (amount, style) => {
+    if (amount)
+        send("hscroll " + Math.round(amount) + " " + (style || "line"));
 });
 
 start();
