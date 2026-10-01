@@ -43,7 +43,7 @@ function post(code, down, flags) {
     than from the event.
 */
 var systemEvents = null;
-var confirmedAt = 0;            // when the main window was last seen to have the keyboard
+var keysAllowed = null;         // this batch's check: null not yet made, "" passed, else why not
 
 // Live's main window: its largest ordinary window - plug-in windows are smaller.
 function mainWindow(live) {
@@ -105,22 +105,19 @@ function keyboardInLiveMain() {
 }
 
 function key(code, mods) {
-    var now = Date.now();
+    /*  Checked once per batch of input - the keys that arrived together - never
+        carried over to the next: a click into a plug-in between two batches is
+        seen before the next key. A knob turned fast queues its keys while a
+        check runs, so they come as one batch and share it.
+    */
+    if (keysAllowed === null) {
+        try { keysAllowed = keyboardInLiveMain(); }
+        catch (e) { keysAllowed = "could not read Live's windows (" + e + ")"; }
+    }
 
-    // Checked at most every 250 ms: a knob turned fast types many arrows.
-    if (now - confirmedAt > 250) {
-        var why;
-
-        try { why = keyboardInLiveMain(); }
-        catch (e) { why = "could not read Live's windows (" + e + ")"; }
-
-        if (why !== "") {
-            say("skipped: " + why);
-            confirmedAt = 0;
-            return;
-        }
-
-        confirmedAt = now;
+    if (keysAllowed !== "") {
+        say("skipped: " + keysAllowed);
+        return;
     }
 
     var held = mods.split(",").filter(function (m) { return MODIFIER_KEYS[m] !== undefined; });
@@ -201,6 +198,8 @@ function run() {
         pending += $.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding).js;
         var lines = pending.split("\n");
         pending = lines.pop();
+
+        keysAllowed = null;     // a new batch: keys in it are checked afresh
         lines.forEach(handle);
     }
 }
