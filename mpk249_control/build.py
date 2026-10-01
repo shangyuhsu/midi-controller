@@ -18,7 +18,7 @@ import json, os, struct, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-DEV_W = 688
+DEV_W = 728
 INSTALL = os.path.expanduser(
     "~/Music/Ableton/User Library/Presets/Audio Effects/Max Audio Effect/MPK249 Control")
 REMOTE_SCRIPTS = "/Applications/Ableton Live 11 Suite.app/Contents/App-Resources/MIDI Remote Scripts"
@@ -46,7 +46,7 @@ LIT_PADS = {1, 2, 3, 4, 9, 10, 11, 12, 13, 14, 15, 16}
 
 CURSOR_STEPS = ["1/32", "1/16", "1/8", "1/4", "1/2", "1 bar", "2 bars", "4 bars", "8 bars"]   # mpk249.js's CURSOR_STEPS
 DEFAULT_STEP = 1
-DEFAULT_DETENTS = {"cursor": 2, "sideScroll": 1, "zoom": 2}
+DEFAULT_SENSITIVITY = {"cursor": 50, "sideScroll": 40, "zoom": 30, "mixer": 50}
 
 
 class Patcher:
@@ -141,7 +141,7 @@ def build():
 
     status = p.shown({"maxclass": "comment", "text": "Waiting for Live...", "numinlets": 1, "numoutlets": 0,
                       "fontsize": 9.0, "linecount": 3, "textcolor": [0.8, 0.8, 0.8, 1.0]},
-                     [30, 360, 190, 44], [8, 22, 250, 44])
+                     [30, 360, 190, 44], [8, 22, 290, 44])
     p.connect(js, 0, status, 0)
 
     # The key helper's own line: whether macOS lets it post events.
@@ -149,7 +149,7 @@ def build():
     pset = p.obj("prepend set", 200, 330, nin=1, nout=1)
     keys_status = p.shown({"maxclass": "comment", "text": "", "numinlets": 1, "numoutlets": 0,
                            "fontsize": 9.0, "linecount": 2, "textcolor": [0.8, 0.8, 0.8, 1.0]},
-                          [30, 410, 190, 24], [8, 66, 250, 24])
+                          [30, 410, 190, 24], [8, 66, 290, 24])
     p.connect(node, 0, route, 0)
     p.connect(route, 0, pset, 0)
     p.connect(pset, 0, keys_status, 0)
@@ -168,23 +168,23 @@ def build():
     to_js(step, "cursorstep", 156, 470)
     p.connect(js, 2, step, 0)      # the grid pads move Step with the grid
 
-    # The view knobs: how many detents make one step.
-    p.label("Detents", [30, 500, 44, 15], [8, 111, 42, 15], size=9.0)
-    for n, (name, text) in enumerate([("cursor", "Cursor"), ("sideScroll", "Scroll"), ("zoom", "Zoom")]):
-        px = 50 + n * 70
-        p.label(text, [80 + n * 90, 500, 36, 15], [px, 111, 36, 15], size=9.0)
-        nb = p.numbox(text + " detents", text, [116 + n * 90, 500, 28, 15], [px + 36, 111, 28, 15],
-                      DEFAULT_DETENTS[name], 1, 16)
-        to_js(nb, "detents " + name, 116 + n * 90, 520)
+    # Each knob's sensitivity, 1-100: higher, more per click (mpk249.js's sens).
+    p.label("Sensitivity", [30, 500, 58, 15], [8, 111, 56, 15], size=9.0)
+    for n, (name, text) in enumerate([("cursor", "Cursor"), ("sideScroll", "Scroll"), ("zoom", "Zoom"), ("mixer", "Mixer")]):
+        px = 64 + n * 58
+        p.label(text, [100 + n * 90, 500, 34, 15], [px, 111, 30, 15], size=8.5)
+        nb = p.numbox(text + " sensitivity", text, [136 + n * 90, 500, 28, 15], [px + 30, 111, 26, 15],
+                      DEFAULT_SENSITIVITY[name], 1, 100)
+        to_js(nb, "sensitivity " + name, 136 + n * 90, 520)
 
-    # The side scroll: which kind of scroll event, and how far a step goes.
+    # The side scroll's and the zoom's kind of event.
     p.label("Scroll", [30, 545, 34, 15], [8, 130, 34, 15], size=9.0)
-    style = p.menu("Scroll style", "Scroll", [64, 545, 60, 15], [42, 130, 64, 15], 0,
+    style = p.menu("Scroll style", "Scroll", [64, 545, 70, 15], [42, 130, 76, 15], 0,
                    items=["Pixels", "Shift+wheel", "Lines"])
     to_js(style, "scrollstyle", 64, 565)
-    p.label("Amount", [130, 545, 40, 15], [112, 130, 40, 15], size=9.0)
-    amount = p.numbox("Scroll amount", "Amount", [170, 545, 34, 15], [152, 130, 36, 15], 40, 1, 400)
-    to_js(amount, "scrollamount", 170, 565)
+    p.label("Zoom", [150, 545, 30, 15], [126, 130, 30, 15], size=9.0)
+    zoom = p.menu("Zoom style", "Zoom", [180, 545, 60, 15], [156, 130, 64, 15], 0, items=["Fine", "Steps"])
+    to_js(zoom, "zoomstyle", 180, 565)
 
     rescan = p.shown({"maxclass": "live.text", "text": "Rescan", "mode": 0,
                       "numinlets": 1, "numoutlets": 2, "outlettype": ["", ""],
@@ -204,8 +204,8 @@ def build():
 
     # Bank A's colours, laid out as the pads are: pad 13 top left, pad 1 bottom left.
     # Each pad: its colour, and - for a pad that shows a state - its lit colour beside it.
-    p.label("Pad colour  |  lit colour (selected / on)", [400, 330, 260, 16], [266, 3, 300, 15], size=9.0, bold=1)
-    cell_w, cell_h, menu_w, x0, y0 = 104, 36, 50, 266, 20
+    p.label("Pad colour  |  lit colour (selected / on)", [400, 330, 260, 16], [306, 3, 300, 15], size=9.0, bold=1)
+    cell_w, cell_h, menu_w, x0, y0 = 104, 36, 50, 306, 20
     rows = [[13, 14, 15, 16], [9, 10, 11, 12], [5, 6, 7, 8], [1, 2, 3, 4]]
 
     for r, row in enumerate(rows):

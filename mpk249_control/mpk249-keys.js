@@ -90,6 +90,11 @@ maxApi.addHandler("key", (name) => {
         send("key " + key.code + " " + key.mods);
 });
 
+maxApi.addHandler("zoom", (pixels) => {
+    if (pixels)
+        send("zoom " + Math.round(pixels));
+});
+
 // The device's own lines, into the same log.
 maxApi.addHandler("log", (...words) => log("device: " + words.join(" ")));
 

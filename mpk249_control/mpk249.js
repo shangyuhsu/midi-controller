@@ -63,8 +63,16 @@ var ENCODER_ACTIONS = {
     8: "masterVolume"
 };
 
-// The view knobs act once per this many detents, however fast they turn (the device's numboxes).
-var detentsPerStep = { cursor: 2, sideScroll: 1, zoom: 2 };
+/*  Each knob's sensitivity (sens), 1-100 - the device's Sensitivity boxes. The view
+    knobs count clicks and ignore speed; the mixer knobs keep the MPK's
+    acceleration.
+        cursor      percent of a step per click: 100 a step a click, 25 one in four
+        sideScroll  pixels (Pixels) per click; lines are a twentieth of it
+        zoom        fine (Cmd-scroll): pixels per click, halved; Steps: as cursor
+        mixer       hundredths of a percent of a parameter's range per click
+*/
+var sens = { cursor: 50, sideScroll: 40, zoom: 30, mixer: 50 };
+var VIEW_KNOBS = { cursor: true, sideScroll: true, zoom: true };
 
 /*  What the cursor knob moves (the device's Cursor menu). Live's API can
     nudge the insert marker by the grid (scroll_view, the arrows) but not read
@@ -88,7 +96,6 @@ var CURSOR_STEPS = [0.125, 0.25, 0.5, 1, 2, 4, 8, 16, 32];   // the device's Ste
 var cursorStepIndex = 1;
 var cursorStep = CURSOR_STEPS[cursorStepIndex];
 
-var PARAM_STEP = 0.005;         // of a parameter's range, per knob step (mixer knobs keep their acceleration)
 /*  The side scroll is a mouse scroll at the pointer: in lines or pixels, not
     bars - how far a bar is on screen depends on the zoom, which Live's API
     does not tell. The device's Scroll menu picks the kind of event (Live
@@ -97,9 +104,16 @@ var PARAM_STEP = 0.005;         // of a parameter's range, per knob step (mixer 
 */
 var SCROLL_STYLES = ["pixel", "shift", "line"];     // the device's Scroll menu
 var scrollStyle = "pixel";
-var scrollAmount = 40;
 var SIDE_SCROLL_SIGN = -1;      // flip if turning right scrolls left
-var ZOOM_IN = 3, ZOOM_OUT = 2;  // zoom_view directions; swap if backwards
+
+/*  Zoom (the device's Zoom menu): "fine" is Cmd and the scroll wheel, a few
+    pixels at a time, zooming about the pointer; "steps" is Live's own
+    zoom_view, a fixed and rather large jump per call.
+*/
+var ZOOM_STYLES = ["fine", "steps"];
+var zoomStyle = "fine";
+var ZOOM_SIGN = 1;              // flip if turning right zooms out (fine)
+var ZOOM_IN = 3, ZOOM_OUT = 2;  // zoom_view directions (steps); swap if backwards
 
 // Bank A's pad colours in the MPK's memory, Akai pad order: unpressed, pressed.
 var COLOUR_ADDRESS_OFF = 0x57c;
@@ -426,24 +440,32 @@ function encoderHandler (encoder)
         if (delta == 0)
             return;
 
-        if (detentsPerStep[action] == null)
+        if (! VIEW_KNOBS[action])
         {
             runEncoder (action, delta);
             return;
         }
 
-        // A view knob counts detents, not speed: one message is one detent.
+        // A view knob counts clicks, not speed: one message is one click.
         var direction = delta > 0 ? 1 : -1;
+
+        // Scrolling and fine zoom go by the amount; the rest by whole steps.
+        if (action == "sideScroll" || (action == "zoom" && zoomStyle == "fine"))
+        {
+            runEncoder (action, direction);
+            return;
+        }
+
         var sofar = accumulated[action] || 0;
 
         if (sofar * direction < 0)
             sofar = 0;              // turned back: start over
 
-        sofar += direction;
+        sofar += direction * sens[action] / 100;
 
-        if (Math.abs (sofar) >= Math.max (1, detentsPerStep[action]))
+        while (Math.abs (sofar) >= 1)
         {
-            sofar = 0;
+            sofar -= direction;
             runEncoder (action, direction);
         }
 
@@ -498,12 +520,16 @@ function runEncoder (action, delta)
             break;
 
         case "zoom":
-            appView ().call ("zoom_view", delta > 0 ? ZOOM_IN : ZOOM_OUT, "Arranger", 0);
+            if (zoomStyle == "fine")
+                outlet (1, "zoom", ZOOM_SIGN * delta * Math.max (1, Math.round (sens.zoom / 2)));
+            else
+                appView ().call ("zoom_view", delta > 0 ? ZOOM_IN : ZOOM_OUT, "Arranger", 0);
             break;
 
         // Live's API cannot scroll a view without moving the selection.
         case "sideScroll":
-            outlet (1, "hscroll", SIDE_SCROLL_SIGN * delta * scrollAmount, scrollStyle);
+            var amount = scrollStyle == "pixel" ? sens.sideScroll : Math.max (1, Math.round (sens.sideScroll / 20));
+            outlet (1, "hscroll", SIDE_SCROLL_SIGN * delta * amount, scrollStyle);
             break;
 
         case "volume":       nudge ("live_set view selected_track mixer_device volume", delta); break;
@@ -565,33 +591,34 @@ function nudge (path, delta)
                                  low: Number (api.get ("min")), high: Number (api.get ("max")) };
     }
 
-    var value = Number (entry.api.get ("value")) + delta * PARAM_STEP * (entry.high - entry.low);
+    var value = Number (entry.api.get ("value")) + delta * sens.mixer / 10000 * (entry.high - entry.low);
     entry.api.set ("value", Math.max (entry.low, Math.min (entry.high, value)));
 }
 
 //==============================================================================
 // From the device's controls
 
-// "detents cursor|sideScroll|zoom <n>"
-function detents (name, n)
+// "sensitivity cursor|sideScroll|zoom|mixer <1-100>"
+function sensitivity (name, n)
 {
-    if (detentsPerStep[name] != null)
+    if (sens[name] != null)
     {
-        detentsPerStep[name] = Math.max (1, Math.floor (n));
+        sens[name] = Math.max (1, Math.min (100, Number (n)));
         accumulated[name] = 0;
     }
 }
 
-// "scrollstyle <menu index>", "scrollamount <n>"
+// "scrollstyle <menu index>", "zoomstyle <menu index>"
 function scrollstyle (index)
 {
     if (index >= 0 && index < SCROLL_STYLES.length)
         scrollStyle = SCROLL_STYLES[index];
 }
 
-function scrollamount (n)
+function zoomstyle (index)
 {
-    scrollAmount = Math.max (1, Math.floor (n));
+    if (index >= 0 && index < ZOOM_STYLES.length)
+        zoomStyle = ZOOM_STYLES[index];
 }
 
 // "cursormode <menu index>": 0 both, 1 arrows, 2 start

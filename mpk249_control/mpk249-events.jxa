@@ -6,6 +6,7 @@
 //                                line   horizontal wheel, in lines
 //                                pixel  horizontal, in pixels, as a trackpad sends it
 //                                shift  the vertical wheel with Shift held, in lines
+//     zoom <pixels>            Cmd + the vertical wheel, in pixels: Live's fine zoom
 //     ping                     answers "pong"
 //
 // Replies and errors go to stderr. A scroll goes to whatever is under the
@@ -158,6 +159,13 @@ function hscroll(amount, style) {
     $.CGEventPost($.kCGHIDEventTap, event);
 }
 
+function zoom(pixels) {
+    var event = $.CGEventCreateScrollWheelEvent2(null, $.kCGScrollEventUnitPixel, 1, pixels, 0, 0);
+    $.CGEventSetIntegerValueField(event, SCROLL_IS_CONTINUOUS, 1);
+    $.CGEventSetFlags(event, FLAGS.cmd);
+    $.CGEventPost($.kCGHIDEventTap, event);
+}
+
 function handle(line) {
     var words = line.trim().split(/\s+/);
 
@@ -165,6 +173,8 @@ function handle(line) {
         key(parseInt(words[1], 10), words[2] || "-");
     else if (words[0] === "hscroll" && words.length >= 2)
         hscroll(parseInt(words[1], 10), words[2] || "line");
+    else if (words[0] === "zoom" && words.length >= 2)
+        zoom(parseInt(words[1], 10));
     else if (words[0] === "ping")
         say("pong");
     else if (words[0] !== "")
