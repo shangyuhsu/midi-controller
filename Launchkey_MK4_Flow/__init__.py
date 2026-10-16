@@ -18,6 +18,7 @@ MIDIRemoteScripts/Launchkey_MK4: a Live update that reorganises it may break
 this, which would show as a script error in Live's Log.txt.
 """
 from __future__ import absolute_import, print_function, unicode_literals
+import logging
 import os
 from Launchkey_MK4 import Launchkey_MK4, create_launchkey_specification, midi
 from Launchkey_MK4.elements import Elements
@@ -28,6 +29,10 @@ from ableton.v3.control_surface.controls import ButtonControl, control_matrix
 from ableton.v3.control_surface.mode import ImmediateBehaviour, make_reenter_behaviour
 
 PAGE_FILE = "/Users/Shared/Flow/Bridge/launchkey-page"
+
+# The v3 framework has no log_message (that is _Framework's): it logs through
+# Python's logging, which Live writes to its Log.txt.
+logger = logging.getLogger(__name__)
 
 
 def get_capabilities():
@@ -127,9 +132,9 @@ class Launchkey_MK4_Flow(Launchkey_MK4):
                 os.makedirs(os.path.dirname(PAGE_FILE))
             with open(PAGE_FILE, "w") as f:
                 f.write(page + "\n")
-            self.log_message("Launchkey_MK4_Flow: pads are " + page + "'s")
+            logger.info("Launchkey_MK4_Flow: pads are " + page + "'s")
         except Exception as e:
-            self.log_message("Launchkey_MK4_Flow: could not write " + PAGE_FILE + ": " + str(e))
+            logger.warning("Launchkey_MK4_Flow: could not write " + PAGE_FILE + ": " + str(e))
 
     def disconnect(self):
         # Gone: the pads are Live's again, as far as Flow is concerned.
