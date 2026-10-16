@@ -112,6 +112,12 @@ class Launchkey_MK4_Flow(Launchkey_MK4):
         daw = self.component_map["Daw_Pad_Modes"]
 
         if daw.selected_mode == "flow":
+            # Each pad remembers the last colour sent it and skips sending it
+            # again - but Flow coloured them since, so coming back the clip
+            # page sent nothing and Flow's colours stayed. Forgotten first.
+            for pad in self.elements.main_pads:
+                pad.clear_send_cache()
+
             daw.selected_mode = self._flow_page_from or "clip"
         else:
             self._flow_page_from = daw.selected_mode
