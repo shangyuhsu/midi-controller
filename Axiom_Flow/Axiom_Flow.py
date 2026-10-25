@@ -19,7 +19,7 @@ Measured on the device (all ch 16, buttons momentary):
     Inst             CC 109        Flow mode <-> DAW mode
     Track < / >      CC 110 / 111  select the previous / next track
 
-The mode is this script's: Inst flips it, and it is written to
+The mode is this script's - DAW to start - Inst flips it, and it is written to
 /Users/Shared/Flow/Bridge/axiom-mode ("flow" or "daw") for Flow, which reads it
 ten times a second - a remote script cannot reach a plugin.
 
@@ -72,7 +72,8 @@ class Axiom_Flow(ControlSurface):
 
     def __init__(self, *a, **k):
         super(Axiom_Flow, self).__init__(*a, **k)
-        self._daw_mode = False
+        # DAW mode to start: in Live the Axiom is a mixer first; Inst gives it to Flow.
+        self._daw_mode = True
         self._shown = None
         self._shown_at = 0
 
@@ -83,7 +84,8 @@ class Axiom_Flow(ControlSurface):
             self._inst_button.add_value_listener(self._inst_value)
 
         self._write_mode()
-        self.log_message("Axiom_Flow: DirectLink on channel %d, Flow mode" % (CHANNEL + 1))
+        self.log_message("Axiom_Flow: DirectLink on channel %d, %s mode"
+                         % (CHANNEL + 1, "DAW" if self._daw_mode else "Flow"))
 
     def _create_transport(self):
         transport = TransportComponent(name="Transport", is_enabled=False,
@@ -108,6 +110,7 @@ class Axiom_Flow(ControlSurface):
         self._mixer.set_select_buttons(_button(NEXT_TRACK_CC, "Next_Track_Button"),
                                        _button(PREV_TRACK_CC, "Prev_Track_Button"))
         self._mixer.set_enabled(True)
+        self._mixer.set_arm_buttons(self._arm_buttons if self._daw_mode else None)
 
         self._faders = faders + [master]
         for fader in self._faders:
