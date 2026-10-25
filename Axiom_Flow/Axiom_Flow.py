@@ -9,7 +9,7 @@ CoreMIDI connection of its own.
 
 Measured on the device (all ch 16, buttons momentary):
     encoders E1-E8   CC 17-24      Flow's knobs - not mapped here
-    pads P1-P8       notes 60-72   Flow's banks - not mapped here
+    pads P5-P8 / P1-P4  notes 67-72 / 60-65   Flow's banks 1-4 / 5-8 - not mapped here
     faders F1-F8     CC 33-40      track 1-8 volume
     fader F9         CC 41         master volume
     buttons F10-F18  CC 49-57      Flow mode: Flow's sets (F17 its pad mode)
@@ -28,8 +28,8 @@ addressable: it shows the value a host last echoed on one of the Axiom's CCs.
 A fader names its track ("3 Bas") and echoes its own position for the number;
 an arm button (DAW mode) names its track, the number 127 armed or 0; Inst
 says "DAW" / "FLOW". The rest is Flow's: the bank at rest, a new set's name,
-knob values - and Flow, seeing these controls on the same port, puts the
-bank back two seconds after the last of them.
+knob values. The script's text stays up until Flow has something new to
+show: a knob turned, a bank or a set.
 
 Live: a Control Surface row of its own, input and output the Axiom's
 "DirectLink" ports, with Track off for the DirectLink input. Its keys port
