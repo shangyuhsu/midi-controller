@@ -165,6 +165,7 @@ class Launchkey_MK4_Flow(Launchkey_MK4):
         self.register_slot(self.component_map["Main_Pad_Modes"], self._report_page, "selected_mode")
         self._report_page()
         self._reported_encoders = None
+        self.register_slot(self.component_map["Main_Encoder_Modes"], self._report_encoders, "selected_mode")
         self._report_encoders()
 
     def toggle_flow_page(self):
@@ -198,23 +199,28 @@ class Launchkey_MK4_Flow(Launchkey_MK4):
     def _toggle_flow_encoders(self):
         modes = self.component_map["Plugin_Encoder_Modes"]
         to_flow = modes.selected_mode != "flow"
-        self.component_map["Encoder_Touch"].flow_owns_encoders = to_flow
         modes.selected_mode = "flow" if to_flow else "live"
+        self._report_encoders()
+        return to_flow
 
-        if not to_flow:
+    def _report_encoders(self, *_):
+        """Flow's only while the toggle is on AND the Plugin layout is up -
+        Flow cannot tell the layout itself (the device reports it only as it
+        changes), and on Mixer or Sends the encoders stay Live's whatever the
+        toggle says.
+        """
+        owner = ("flow" if self.component_map["Plugin_Encoder_Modes"].selected_mode == "flow"
+                 and self.component_map["Main_Encoder_Modes"].selected_mode == "plugin" else "live")
+        self.component_map["Encoder_Touch"].flow_owns_encoders = owner == "flow"
+
+        if owner == self._reported_encoders:
+            return
+
+        if owner == "live" and self._reported_encoders == "flow":
             # Flow wrote these displays meanwhile; each remembers what it last
             # sent and skips sending it again, so forget it all and resend.
             for i in range(8):
                 getattr(self.elements, "encoder_{}_display_command".format(i)).clear_send_cache()
-
-        self._report_encoders()
-        return to_flow
-
-    def _report_encoders(self):
-        owner = "flow" if self.component_map["Plugin_Encoder_Modes"].selected_mode == "flow" else "live"
-
-        if owner == self._reported_encoders:
-            return
 
         self._reported_encoders = owner
         self._write_bridge(ENCODERS_FILE, owner)
