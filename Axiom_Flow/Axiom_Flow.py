@@ -13,7 +13,8 @@ Measured on the device (all ch 16, buttons momentary):
     faders F1-F8     CC 33-40      track 1-8 volume
     fader F9         CC 41         master volume
     buttons F10-F18  CC 49-57      Flow mode: Flow's sets (F17 its pad mode)
-                                   DAW mode: F10-F16 arm tracks 1-7,
+                                   DAW mode: F10-F16 arm tracks 1-7 and select
+                                   them (Shift held: arm only),
                                    F17 / F18 step Flow's set row
     Loop Rew FF Stop Play Rec  CC 113-118
     Inst             CC 109        Flow mode <-> DAW mode
@@ -58,6 +59,7 @@ TRACK_FADER_CCS = range(33, 41)
 MASTER_FADER_CC = 41
 ARM_BUTTON_CCS = range(49, 56)
 INST_CC = 109
+SHIFT_CC = 13
 PREV_TRACK_CC, NEXT_TRACK_CC = 110, 111
 LOOP_CC, REWIND_CC, FORWARD_CC, STOP_CC, PLAY_CC, RECORD_CC = 113, 114, 115, 116, 117, 118
 
@@ -82,6 +84,9 @@ class Axiom_Flow(ControlSurface):
             self._create_mixer()
             self._inst_button = _button(INST_CC, "Inst_Button")
             self._inst_button.add_value_listener(self._inst_value)
+            self._shift_held = False
+            self._shift_button = _button(SHIFT_CC, "Shift_Button")
+            self._shift_button.add_value_listener(self._shift_value)
 
         self._write_mode()
         self.log_message("Axiom_Flow: DirectLink on channel %d, %s mode"
@@ -136,10 +141,21 @@ class Axiom_Flow(ControlSurface):
         self._show(self._track_label(track) + " " + track.name)
         self._echo(sender.message_identifier(), value)
 
+    def _shift_value(self, value):
+        self._shift_held = value != 0
+
     def _arm_value(self, value, sender):
         if not self._daw_mode or value == 0:
             return
         index = list(self._arm_buttons).index(sender)
+
+        # The mixer toggles the arm; a press also selects the track, unless
+        # Shift is held - then it only arms. (Flow reads Shift too: there it
+        # makes the encoders read-only.)
+        track = self._strip_track(index)
+        if track is not None and not self._shift_held:
+            self.song().view.selected_track = track
+
         # The mixer toggles the arm on this same message; read it a tick later.
         self.schedule_message(1, self._show_arm, (index, sender.message_identifier()))
 
@@ -215,6 +231,7 @@ class Axiom_Flow(ControlSurface):
 
     def disconnect(self):
         self._inst_button.remove_value_listener(self._inst_value)
+        self._shift_button.remove_value_listener(self._shift_value)
         for fader in self._faders:
             if fader.value_has_listener(self._fader_value):
                 fader.remove_value_listener(self._fader_value)
