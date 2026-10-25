@@ -1,107 +1,148 @@
-"""Axiom Flow - the M-Audio Axiom 49 (2nd gen) in Live, beside Flow.
+"""Axiom Flow - the M-Audio Axiom 49 (2nd gen) in Live, beside Flow, through DirectLink.
 
-The Axiom has one port for everything ("Axiom USB In"), and Live has to
-listen to it for the keys - so without this every track listening to it
-played and recorded Flow's knobs and pads. This script claims those (a
-message forwarded to a script never reaches a track) and does nothing with
-them: Flow reads them over a CoreMIDI connection of its own.
+DirectLink is the Axiom's host mode: a handshake on its DirectLink port, and
+from then on its controls send the firmware's own messages on that port,
+channel 16, whatever preset is loaded - apart from the keys, which stay on
+"Axiom USB In". So the DirectLink port can be Track off in Live: nothing on it
+reaches a track, and nothing needs claiming. Flow reads the same port over a
+CoreMIDI connection of its own.
 
-Two presets on the Axiom, told apart by channel:
+Measured on the device (all ch 16, buttons momentary):
+    encoders E1-E8   CC 17-24      Flow's knobs - not mapped here
+    pads P1-P8       notes 60-72   Flow's banks - not mapped here
+    faders F1-F8     CC 33-40      track 1-8 volume
+    fader F9         CC 41         master volume
+    buttons F10-F18  CC 49-57      Flow mode: Flow's sets (F17 its pad mode)
+                                   DAW mode: F10-F16 arm tracks 1-7,
+                                   F17 / F18 step Flow's set row
+    Loop Rew FF Stop Play Rec  CC 113-118
+    Inst             CC 109        Flow mode <-> DAW mode
+    Track < / >      CC 110 / 111  select the previous / next track
 
-    Flow (patch 1)  encoders E1-E8   CC 38-45 ch 1, Rel. Bin Offset
-                    pads P1-P8       notes 61 60 64 63 81 80 76 62, ch 10
-                    buttons F10-F18  CC 24-32 ch 1
-                    faders F1-F9     ch 1, left to the tracks
-    DAW (patch 2)   the same, but faders F1-F9 and buttons F10-F18 on ch 2:
-                    F1-F8   track 1-8 volume (CC 73 75 72 74 79 84 89 90)
-                    F9      master volume (CC 7)
-                    F10-F16 track 1-7 arm (CC 24-30)
-                    F17/F18 Flow's set left / right (CC 31/32) - claimed
+The mode is this script's: Inst flips it, and it is written to
+/Users/Shared/Flow/Bridge/axiom-mode ("flow" or "daw") for Flow, which reads it
+ten times a second - a remote script cannot reach a plugin. The LCD shows "DAW"
+on entering DAW mode; in Flow mode Flow writes the set's name there.
 
-The fader buttons are toggles (127, then 0 on the next press), so the arm
-buttons are not momentary: either value is one press, which toggles.
-
-Live: a Control Surface row of its own, input the Axiom's "Axiom USB In"
-port, output None. No controller id, so Live never picks it by itself - and
-Live's own Axiom_DirectLink script must not be on the Axiom either.
+Live: a Control Surface row of its own, input and output the Axiom's
+"DirectLink" ports, with Track off for the DirectLink input. Its keys port
+("Axiom USB In") stays a plain track input. Live's own Axiom_DirectLink must not
+be on the Axiom.
 """
 from __future__ import absolute_import, print_function, unicode_literals
-import Live
+import os
 from _Framework.ButtonElement import ButtonElement
 from _Framework.ButtonMatrixElement import ButtonMatrixElement
 from _Framework.ControlSurface import ControlSurface
-from _Framework.EncoderElement import EncoderElement
-from _Framework.InputControlElement import MIDI_CC_TYPE, MIDI_NOTE_TYPE
+from _Framework.InputControlElement import MIDI_CC_TYPE
 from _Framework.Layer import Layer
 from _Framework.MixerComponent import MixerComponent
 from _Framework.SliderElement import SliderElement
+from _Framework.TransportComponent import TransportComponent
 
-# 0-based channels.
-FLOW_CHANNEL = 0
-PAD_CHANNEL = 9
-DAW_CHANNEL = 1
+CHANNEL = 15                # 0-based: MIDI channel 16
+SYSEX_START = (240, 0, 1, 5, 32, 127)
+DIRECTLINK_ON = SYSEX_START + (32, 46, 247)
+DIRECTLINK_OFF = SYSEX_START + (32, 0, 247)
+DISPLAY_START = SYSEX_START + (17, 1, 0, 0)
 
-ENCODER_CCS = range(38, 46)
-PAD_NOTES = (61, 60, 64, 63, 81, 80, 76, 62)
-FLOW_BUTTON_CCS = range(24, 33)
+TRACK_FADER_CCS = range(33, 41)
+MASTER_FADER_CC = 41
+ARM_BUTTON_CCS = range(49, 56)
+INST_CC = 109
+PREV_TRACK_CC, NEXT_TRACK_CC = 110, 111
+LOOP_CC, REWIND_CC, FORWARD_CC, STOP_CC, PLAY_CC, RECORD_CC = 113, 114, 115, 116, 117, 118
 
-TRACK_FADER_CCS = (73, 75, 72, 74, 79, 84, 89, 90)
-MASTER_FADER_CC = 7
-ARM_BUTTON_CCS = range(24, 31)
-SET_STEP_CCS = (31, 32)
+MODE_FILE = "/Users/Shared/Flow/Bridge/axiom-mode"
+
+
+def _button(cc, name):
+    return ButtonElement(True, MIDI_CC_TYPE, CHANNEL, cc, name=name)
 
 
 class Axiom_Flow(ControlSurface):
 
     def __init__(self, *a, **k):
         super(Axiom_Flow, self).__init__(*a, **k)
-        self._claimed = []
+        self._daw_mode = False
 
         with self.component_guard():
-            self._create_flow_controls()
+            self._create_transport()
             self._create_mixer()
+            self._inst_button = _button(INST_CC, "Inst_Button")
+            self._inst_button.add_value_listener(self._inst_value)
 
-        self.log_message("Axiom_Flow: claiming %d Flow controls; F1-F9 / F10-F16 on ch %d drive the mixer"
-                         % (len(self._claimed), DAW_CHANNEL + 1))
+        self._write_mode()
+        self.log_message("Axiom_Flow: DirectLink on channel %d, Flow mode" % (CHANNEL + 1))
 
-    def _create_flow_controls(self):
-        for cc in ENCODER_CCS:
-            self._claimed.append(EncoderElement(MIDI_CC_TYPE, FLOW_CHANNEL, cc,
-                                                Live.MidiMap.MapMode.relative_binary_offset,
-                                                name="Encoder_%d" % (cc - ENCODER_CCS[0] + 1)))
-
-        for n, note in enumerate(PAD_NOTES):
-            self._claimed.append(ButtonElement(True, MIDI_NOTE_TYPE, PAD_CHANNEL, note, name="Pad_%d" % (n + 1)))
-
-        for cc in FLOW_BUTTON_CCS:
-            self._claimed.append(ButtonElement(False, MIDI_CC_TYPE, FLOW_CHANNEL, cc, name="Flow_Button_%d" % cc))
-
-        for cc in SET_STEP_CCS:
-            self._claimed.append(ButtonElement(False, MIDI_CC_TYPE, DAW_CHANNEL, cc, name="Set_Step_%d" % cc))
-
-        # A listener of the script's own is what makes Live forward the
-        # message here - and a forwarded message is not passed to tracks.
-        for control in self._claimed:
-            control.add_value_listener(self._swallow)
+    def _create_transport(self):
+        transport = TransportComponent(name="Transport", is_enabled=False,
+                                       layer=Layer(play_button=_button(PLAY_CC, "Play_Button"),
+                                                   stop_button=_button(STOP_CC, "Stop_Button"),
+                                                   record_button=_button(RECORD_CC, "Record_Button"),
+                                                   loop_button=_button(LOOP_CC, "Loop_Button"),
+                                                   seek_forward_button=_button(FORWARD_CC, "Forward_Button"),
+                                                   seek_backward_button=_button(REWIND_CC, "Rewind_Button")))
+        transport.set_enabled(True)
 
     def _create_mixer(self):
-        faders = [SliderElement(MIDI_CC_TYPE, DAW_CHANNEL, cc, name="Volume_%d" % (n + 1))
+        faders = [SliderElement(MIDI_CC_TYPE, CHANNEL, cc, name="Volume_%d" % (n + 1))
                   for n, cc in enumerate(TRACK_FADER_CCS)]
-        arms = [ButtonElement(False, MIDI_CC_TYPE, DAW_CHANNEL, cc, name="Arm_%d" % (n + 1))
-                for n, cc in enumerate(ARM_BUTTON_CCS)]
+        self._arm_buttons = ButtonMatrixElement(rows=[[_button(cc, "Arm_%d" % (n + 1))
+                                                       for n, cc in enumerate(ARM_BUTTON_CCS)]])
 
-        mixer = MixerComponent(len(faders), name="Mixer", is_enabled=False,
-                               layer=Layer(volume_controls=ButtonMatrixElement(rows=[faders]),
-                                           arm_buttons=ButtonMatrixElement(rows=[arms])))
-        mixer.master_strip().set_volume_control(SliderElement(MIDI_CC_TYPE, DAW_CHANNEL, MASTER_FADER_CC,
-                                                              name="Master_Volume"))
-        mixer.set_enabled(True)
+        self._mixer = MixerComponent(len(faders), name="Mixer", is_enabled=False,
+                                     layer=Layer(volume_controls=ButtonMatrixElement(rows=[faders])))
+        self._mixer.master_strip().set_volume_control(SliderElement(MIDI_CC_TYPE, CHANNEL, MASTER_FADER_CC,
+                                                                    name="Master_Volume"))
+        self._mixer.set_select_buttons(_button(NEXT_TRACK_CC, "Next_Track_Button"),
+                                       _button(PREV_TRACK_CC, "Prev_Track_Button"))
+        self._mixer.set_enabled(True)
 
-    def _swallow(self, value):
-        pass
+    def _inst_value(self, value):
+        if value == 0:
+            return
+
+        self._daw_mode = not self._daw_mode
+
+        # Flow mode: the fader buttons are Flow's sets, so nothing of Live's on them.
+        self._mixer.set_arm_buttons(self._arm_buttons if self._daw_mode else None)
+        self._write_mode()
+
+        if self._daw_mode:
+            self._show("DAW")
+
+        self.log_message("Axiom_Flow: %s mode" % ("DAW" if self._daw_mode else "Flow"))
+
+    def _write_mode(self):
+        try:
+            if not os.path.isdir(os.path.dirname(MODE_FILE)):
+                os.makedirs(os.path.dirname(MODE_FILE))
+            with open(MODE_FILE, "w") as f:
+                f.write(("daw" if self._daw_mode else "flow") + "\n")
+        except Exception as e:
+            self.log_message("Axiom_Flow: could not write %s: %s" % (MODE_FILE, e))
+
+    def _show(self, text):
+        text = (text + "     ")[:5]
+        self._send_midi(DISPLAY_START + tuple(ord(c) if 32 <= ord(c) < 127 else 63 for c in text) + (247,))
+
+    def refresh_state(self):
+        # DirectLink is entered by asking; the Axiom answers in the same form.
+        super(Axiom_Flow, self).refresh_state()
+        self.schedule_message(3, self._send_midi, DIRECTLINK_ON)
+
+    def handle_sysex(self, midi_bytes):
+        if midi_bytes[:len(SYSEX_START) + 1] == SYSEX_START + (32,):
+            self.log_message("Axiom_Flow: the Axiom is in DirectLink mode")
+            self._show("DAW" if self._daw_mode else "FLOW")
+        else:
+            super(Axiom_Flow, self).handle_sysex(midi_bytes)
 
     def disconnect(self):
-        for control in self._claimed:
-            if control.value_has_listener(self._swallow):
-                control.remove_value_listener(self._swallow)
+        self._inst_button.remove_value_listener(self._inst_value)
+        self._daw_mode = False
+        self._write_mode()
+        self._show("     ")
+        self._send_midi(DIRECTLINK_OFF)
         super(Axiom_Flow, self).disconnect()
