@@ -19,6 +19,10 @@ their displays itself. Off, the Plugin layout is Live's device control again,
 its displays re-sent in full. Written for Flow to
 /Users/Shared/Flow/Bridge/launchkey-encoders ("flow" or "live").
 
+The toggle says "Mode / Flow" or "Mode / DAW" on the screen as it goes. The
+script also half-arms (auto-arms) the selected track with a Push connected,
+which Ableton's leaves to the Push.
+
 Set it in Live's Preferences > Link/Tempo/MIDI in place of "Launchkey MK4",
 with the same DAW ports. Built on the decompiled script in
 MIDIRemoteScripts/Launchkey_MK4: a Live update that reorganises it may break
@@ -30,10 +34,13 @@ import os
 from Launchkey_MK4 import Launchkey_MK4, create_launchkey_specification, midi
 from Launchkey_MK4.elements import Elements
 from Launchkey_MK4.encoder_touch import EncoderTouchComponent
+from Launchkey_MK4.auto_arm import AutoArmComponent
+from ableton.v3.live import any_track_armed
 from Launchkey_MK4.mappings import create_mappings
 from ableton.v3.control_surface import Component
 from ableton.v3.control_surface.capabilities import NOTES_CC, PORTS_KEY, SCRIPT, SYNC, inport, outport
 from ableton.v3.control_surface.controls import ButtonControl, EncoderControl, control_matrix
+from ableton.v3.control_surface.display import Renderable
 from ableton.v3.control_surface.mode import ImmediateBehaviour, make_reenter_behaviour
 
 PAGE_FILE = "/Users/Shared/Flow/Bridge/launchkey-page"
@@ -94,7 +101,19 @@ class FlowEncoderTouchComponent(EncoderTouchComponent):
             super(FlowEncoderTouchComponent, self)._set_released(index)
 
 
-class FlowToggleComponent(Component):
+class FlowAutoArmComponent(AutoArmComponent):
+    """Ableton's, less one rule: it stands down whenever a Push app is running,
+    leaving auto-arm to the Push - and with a Push 2 connected, selecting a
+    track from the Launchkey never half-armed it for the keys. Both now may;
+    they arm the same selected track. No track explicitly armed is still
+    required, as in Live.
+    """
+
+    def _can_auto_arm(self):
+        return self.is_enabled() and not any_track_armed()
+
+
+class FlowToggleComponent(Component, Renderable):
     toggle_button = ButtonControl(color=None)
 
     def __init__(self, *a, **k):
@@ -104,7 +123,9 @@ class FlowToggleComponent(Component):
     @toggle_button.pressed
     def toggle_button(self, _):
         if self.control_surface is not None:
-            self.control_surface.toggle_flow_page()
+            to_flow = self.control_surface.toggle_flow_page()
+            # The screen says which way it went, as the script's own mode changes do.
+            self.notify(self.notifications.generic, "Mode\n" + ("Flow" if to_flow else "DAW"))
 
 
 def create_flow_mappings(control_surface):
@@ -147,27 +168,32 @@ class Launchkey_MK4_Flow(Launchkey_MK4):
         self._report_encoders()
 
     def toggle_flow_page(self):
+        """Returns True when the toggle went to Flow."""
         # The encoders' Plugin layout follows the toggle whatever the pads show.
-        self._toggle_flow_encoders()
+        to_flow = self._toggle_flow_encoders()
 
         # Only the DAW layout's pads are the script's to give; on Drum or a
         # Custom Mode the toggle does nothing more.
         if self.component_map["Main_Pad_Modes"].selected_mode != "daw":
-            return
+            return to_flow
 
         daw = self.component_map["Daw_Pad_Modes"]
 
-        if daw.selected_mode == "flow":
+        # Pads follow the encoders, so the two never end up on opposite sides.
+        if not to_flow:
             # Each pad remembers the last colour sent it and skips sending it
             # again - but Flow coloured them since, so coming back the clip
             # page sent nothing and Flow's colours stayed. Forgotten first.
             for pad in self.elements.main_pads:
                 pad.clear_send_cache()
 
-            daw.selected_mode = self._flow_page_from or "clip"
-        else:
+            if daw.selected_mode == "flow":
+                daw.selected_mode = self._flow_page_from or "clip"
+        elif daw.selected_mode != "flow":
             self._flow_page_from = daw.selected_mode
             daw.selected_mode = "flow"
+
+        return to_flow
 
     def _toggle_flow_encoders(self):
         modes = self.component_map["Plugin_Encoder_Modes"]
@@ -182,6 +208,7 @@ class Launchkey_MK4_Flow(Launchkey_MK4):
                 getattr(self.elements, "encoder_{}_display_command".format(i)).clear_send_cache()
 
         self._report_encoders()
+        return to_flow
 
     def _report_encoders(self):
         owner = "flow" if self.component_map["Plugin_Encoder_Modes"].selected_mode == "flow" else "live"
@@ -235,6 +262,7 @@ class Launchkey_MK4_Flow(Launchkey_MK4):
 
 def create_instance(c_instance):
     specification = create_launchkey_specification(FlowElements, create_flow_mappings, midi.MK4_SYSEX_HEADER)
+    specification.auto_arm_component_type = FlowAutoArmComponent
     specification.component_map = dict(specification.component_map,
                                         Flow_Page=FlowPageComponent,
                                         Flow_Toggle=FlowToggleComponent,
