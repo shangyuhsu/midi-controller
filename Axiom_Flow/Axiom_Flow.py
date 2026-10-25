@@ -27,7 +27,7 @@ ten times a second - a remote script cannot reach a plugin.
 The LCD has five characters and a number beside them. The number is not
 addressable: it shows the value a host last echoed on one of the Axiom's CCs.
 A fader names its track ("3 Bas") and echoes its own position for the number;
-an arm button (DAW mode) names its track, the number 127 armed or 0; Inst
+an arm button (DAW mode) names its track, the number its level 0-127; Inst
 says "DAW" / "FLOW". The rest is Flow's: the bank at rest, a new set's name,
 knob values. The script's text stays up until Flow has something new to
 show: a knob turned, a bank or a set.
@@ -145,9 +145,14 @@ class Axiom_Flow(ControlSurface):
         self._shift_held = value != 0
 
     def _arm_value(self, value, sender):
-        if not self._daw_mode or value == 0:
+        if not self._daw_mode:
             return
         index = list(self._arm_buttons).index(sender)
+
+        # Let go of, the button's own 0 would be the number; the level again.
+        if value == 0:
+            self._echo_volume(index)
+            return
 
         # The mixer toggles the arm; a press also selects the track, unless
         # Shift is held - then it only arms. (Flow reads Shift too: there it
@@ -157,15 +162,27 @@ class Axiom_Flow(ControlSurface):
             self.song().view.selected_track = track
 
         # The mixer toggles the arm on this same message; read it a tick later.
-        self.schedule_message(1, self._show_arm, (index, sender.message_identifier()))
+        # A tuple: schedule_message drops a parameter that is 0 (track 1's index).
+        self.schedule_message(1, self._show_arm, (index,))
 
     def _show_arm(self, args):
-        index, cc = args
+        index = args[0]
         track = self._strip_track(index)
         if track is None:
             return
         self._show(self._track_label(track) + " " + track.name)
-        self._echo(cc, 127 if track.arm else 0)
+        self._echo_volume(index)
+
+    def _echo_volume(self, index):
+        """ The track's level, 0-127, as the number - on its fader's CC, so the
+        arm button's light is left to the mixer. """
+        track = self._strip_track(index)
+        if track is None:
+            return
+        volume = track.mixer_device.volume
+        span = volume.max - volume.min
+        level = (volume.value - volume.min) / span if span else 0.0
+        self._echo(TRACK_FADER_CCS[index], int(round(level * 127)))
 
     def _relight_arms(self):
         if self._daw_mode:
