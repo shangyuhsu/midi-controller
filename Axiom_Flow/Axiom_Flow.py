@@ -23,10 +23,13 @@ The mode is this script's: Inst flips it, and it is written to
 /Users/Shared/Flow/Bridge/axiom-mode ("flow" or "daw") for Flow, which reads it
 ten times a second - a remote script cannot reach a plugin.
 
-The LCD has five characters. Flow writes it in Flow mode (the set, knobs,
-presses). In DAW mode this script does: "DAW" at rest; a fader names its
-track ("3 Bas") and then follows its level ("3 -6"); an arm button says
-"3 ARM" / "3 off", then the track's name. Two seconds later, "DAW" again.
+The LCD has five characters and a number beside them. The number is not
+addressable: it shows the value a host last echoed on one of the Axiom's CCs.
+A fader names its track ("3 Bas") and echoes its own position for the number;
+an arm button (DAW mode) names its track, the number 127 armed or 0; Inst
+says "DAW" / "FLOW". The rest is Flow's: the bank at rest, a new set's name,
+knob values - and Flow, seeing these controls on the same port, puts the
+bank back two seconds after the last of them.
 
 Live: a Control Surface row of its own, input and output the Axiom's
 "DirectLink" ports, with Track off for the DirectLink input. Its keys port
@@ -35,6 +38,7 @@ be on the Axiom.
 """
 from __future__ import absolute_import, print_function, unicode_literals
 import os
+import time
 from _Framework.ButtonElement import ButtonElement
 from _Framework.ButtonMatrixElement import ButtonMatrixElement
 from _Framework.ControlSurface import ControlSurface
@@ -59,10 +63,6 @@ LOOP_CC, REWIND_CC, FORWARD_CC, STOP_CC, PLAY_CC, RECORD_CC = 113, 114, 115, 116
 
 MODE_FILE = "/Users/Shared/Flow/Bridge/axiom-mode"
 
-# In display ticks, about 100 ms each.
-NAME_TICKS = 7
-HOLD_TICKS = 20
-
 
 def _button(cc, name):
     return ButtonElement(True, MIDI_CC_TYPE, CHANNEL, cc, name=name)
@@ -74,9 +74,7 @@ class Axiom_Flow(ControlSurface):
         super(Axiom_Flow, self).__init__(*a, **k)
         self._daw_mode = False
         self._shown = None
-        self._fader_track = None        # the track whose level is being followed
-        self._fader_name_ticks = 0
-        self._rest_ticks = 0
+        self._shown_at = 0
 
         with self.component_guard():
             self._create_transport()
@@ -128,57 +126,31 @@ class Axiom_Flow(ControlSurface):
         return str(tracks.index(track) + 1) if track in tracks else "?"
 
     def _fader_value(self, value, sender):
-        if not self._daw_mode:
-            return
         index = self._faders.index(sender)
         track = self.song().master_track if index == len(self._faders) - 1 else self._strip_track(index)
         if track is None:
             return
-        if track != self._fader_track:
-            # A new fader: its track's name first, then its level.
-            self._fader_track = track
-            self._fader_name_ticks = NAME_TICKS
-            self._show(self._track_label(track) + " " + track.name)
-        self._rest_ticks = HOLD_TICKS
+        self._show(self._track_label(track) + " " + track.name)
+        self._echo(sender.message_identifier(), value)
 
     def _arm_value(self, value, sender):
         if not self._daw_mode or value == 0:
             return
         index = list(self._arm_buttons).index(sender)
         # The mixer toggles the arm on this same message; read it a tick later.
-        self.schedule_message(1, self._show_arm, index)
+        self.schedule_message(1, self._show_arm, (index, sender.message_identifier()))
 
-    def _show_arm(self, index):
+    def _show_arm(self, args):
+        index, cc = args
         track = self._strip_track(index)
         if track is None:
             return
-        self._fader_track = None
-        self._show(self._track_label(track) + (" ARM" if track.arm else " off"))
-        self.schedule_message(NAME_TICKS, self._show_if_resting, self._track_label(track) + " " + track.name)
-        self._rest_ticks = HOLD_TICKS
+        self._show(self._track_label(track) + " " + track.name)
+        self._echo(cc, 127 if track.arm else 0)
 
-    def _show_if_resting(self, text):
-        if self._daw_mode and self._fader_track is None:
-            self._show(text)
-
-    def update_display(self):
-        super(Axiom_Flow, self).update_display()
-        if not self._daw_mode:
-            return
-        if self._fader_track is not None:
-            if self._fader_name_ticks > 0:
-                self._fader_name_ticks -= 1
-            else:
-                volume = self._fader_track.mixer_device.volume
-                level = volume.str_for_value(volume.value).replace(" ", "").replace("dB", "")
-                if level.startswith("-") and "." in level:
-                    level = level.split(".")[0]
-                self._show(self._track_label(self._fader_track) + " " + level)
-        if self._rest_ticks > 0:
-            self._rest_ticks -= 1
-            if self._rest_ticks == 0:
-                self._fader_track = None
-                self._show("DAW")
+    def _echo(self, cc, value):
+        # Sets the number beside the text - see the module's note.
+        self._send_midi((0xB0 | CHANNEL, cc, value))
 
     def _inst_value(self, value):
         if value == 0:
@@ -190,11 +162,8 @@ class Axiom_Flow(ControlSurface):
         self._mixer.set_arm_buttons(self._arm_buttons if self._daw_mode else None)
         self._write_mode()
 
-        self._fader_track = None
-        self._rest_ticks = 0
         self._shown = None      # Flow may have written since
-        if self._daw_mode:
-            self._show("DAW")
+        self._show("DAW" if self._daw_mode else "FLOW")
 
         self.log_message("Axiom_Flow: %s mode" % ("DAW" if self._daw_mode else "Flow"))
 
@@ -209,9 +178,14 @@ class Axiom_Flow(ControlSurface):
 
     def _show(self, text):
         text = (text + "     ")[:5]
-        if text == self._shown:
+        # Same text again within a moment: skip it. Any longer, and Flow may
+        # have put its bank back since, so it is sent again.
+        now = time.time()
+        if text == self._shown and now - self._shown_at < 1.0:
+            self._shown_at = now
             return
         self._shown = text
+        self._shown_at = now
         self._send_midi(DISPLAY_START + tuple(ord(c) if 32 <= ord(c) < 127 else 63 for c in text) + (247,))
 
     def refresh_state(self):
