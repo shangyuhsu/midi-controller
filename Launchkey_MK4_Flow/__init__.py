@@ -19,9 +19,8 @@ their displays itself. Off, the Plugin layout is Live's device control again,
 its displays re-sent in full. Written for Flow to
 /Users/Shared/Flow/Bridge/launchkey-encoders ("flow" or "live").
 
-The toggle says "Mode / Flow" or "Mode / DAW" on the screen as it goes. The
-script also half-arms (auto-arms) the selected track with a Push connected,
-which Ableton's leaves to the Push.
+The toggle says "Mode / Flow" or "Mode / DAW" on the screen as it goes. In
+the fader buttons' Arm layout a press also selects the track, as the Axiom's do.
 
 Set it in Live's Preferences > Link/Tempo/MIDI in place of "Launchkey MK4",
 with the same DAW ports. Built on the decompiled script in
@@ -34,14 +33,13 @@ import os
 from Launchkey_MK4 import Launchkey_MK4, create_launchkey_specification, midi
 from Launchkey_MK4.elements import Elements
 from Launchkey_MK4.encoder_touch import EncoderTouchComponent
-from Launchkey_MK4.auto_arm import AutoArmComponent
-from ableton.v3.live import any_track_armed
 from Launchkey_MK4.mappings import create_mappings
 from ableton.v3.control_surface import Component
 from ableton.v3.control_surface.capabilities import NOTES_CC, PORTS_KEY, SCRIPT, SYNC, inport, outport
 from ableton.v3.control_surface.controls import ButtonControl, EncoderControl, control_matrix
 from ableton.v3.control_surface.display import Renderable
 from ableton.v3.control_surface.mode import ImmediateBehaviour, make_reenter_behaviour
+from ableton.v3.live import song
 
 PAGE_FILE = "/Users/Shared/Flow/Bridge/launchkey-page"
 ENCODERS_FILE = "/Users/Shared/Flow/Bridge/launchkey-encoders"
@@ -101,18 +99,6 @@ class FlowEncoderTouchComponent(EncoderTouchComponent):
             super(FlowEncoderTouchComponent, self)._set_released(index)
 
 
-class FlowAutoArmComponent(AutoArmComponent):
-    """Ableton's, less one rule: it stands down whenever a Push app is running,
-    leaving auto-arm to the Push - and with a Push 2 connected, selecting a
-    track from the Launchkey never half-armed it for the keys. Both now may;
-    they arm the same selected track. No track explicitly armed is still
-    required, as in Live.
-    """
-
-    def _can_auto_arm(self):
-        return self.is_enabled() and not any_track_armed()
-
-
 class FlowToggleComponent(Component, Renderable):
     toggle_button = ButtonControl(color=None)
 
@@ -165,6 +151,8 @@ class Launchkey_MK4_Flow(Launchkey_MK4):
         self.register_slot(self.component_map["Main_Pad_Modes"], self._report_page, "selected_mode")
         self._report_page()
         self._reported_encoders = None
+        for button in self.elements.fader_buttons_raw:
+            button.add_value_listener(self._on_fader_button, identify_sender=True)
         self.register_slot(self.component_map["Main_Encoder_Modes"], self._report_encoders, "selected_mode")
         self._report_encoders()
 
@@ -195,6 +183,18 @@ class Launchkey_MK4_Flow(Launchkey_MK4):
             daw.selected_mode = "flow"
 
         return to_flow
+
+    def _on_fader_button(self, value, sender):
+        """In the Arm layout a press arms (Ableton's mixer does that) and also
+        selects the track. Select layout is untouched."""
+        if not value or self.component_map["Fader_Button_Modes"].selected_mode != "arm":
+            return
+
+        index = list(self.elements.fader_buttons_raw).index(sender)
+        track = self.component_map["Mixer"].channel_strip(index).track
+
+        if track is not None:
+            song().view.selected_track = track
 
     def _toggle_flow_encoders(self):
         modes = self.component_map["Plugin_Encoder_Modes"]
@@ -255,6 +255,10 @@ class Launchkey_MK4_Flow(Launchkey_MK4):
             logger.warning("Launchkey_MK4_Flow: could not write " + PAGE_FILE + ": " + str(e))
 
     def disconnect(self):
+        for button in self.elements.fader_buttons_raw:
+            if button.value_has_listener(self._on_fader_button):
+                button.remove_value_listener(self._on_fader_button)
+
         # Gone: the pads are Live's again, as far as Flow is concerned.
         self._reported_page = None
         for path in (PAGE_FILE, ENCODERS_FILE):
@@ -268,7 +272,6 @@ class Launchkey_MK4_Flow(Launchkey_MK4):
 
 def create_instance(c_instance):
     specification = create_launchkey_specification(FlowElements, create_flow_mappings, midi.MK4_SYSEX_HEADER)
-    specification.auto_arm_component_type = FlowAutoArmComponent
     specification.component_map = dict(specification.component_map,
                                         Flow_Page=FlowPageComponent,
                                         Flow_Toggle=FlowToggleComponent,
