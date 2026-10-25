@@ -12,6 +12,13 @@ Launchkey's DAW port and lights them in its bank colours. It learns which
 page is showing from one word, "flow" or "live", written here to
 /Users/Shared/Flow/Bridge/launchkey-page whenever that changes.
 
+The same toggle gives Flow the encoders' Plugin layout: there, with the toggle
+on, Ableton's device control lets go of the eight encoders and its knob
+readouts stay quiet, and Flow reads the encoders off the DAW port and fills
+their displays itself. Off, the Plugin layout is Live's device control again,
+its displays re-sent in full. Written for Flow to
+/Users/Shared/Flow/Bridge/launchkey-encoders ("flow" or "live").
+
 Set it in Live's Preferences > Link/Tempo/MIDI in place of "Launchkey MK4",
 with the same DAW ports. Built on the decompiled script in
 MIDIRemoteScripts/Launchkey_MK4: a Live update that reorganises it may break
@@ -22,13 +29,15 @@ import logging
 import os
 from Launchkey_MK4 import Launchkey_MK4, create_launchkey_specification, midi
 from Launchkey_MK4.elements import Elements
+from Launchkey_MK4.encoder_touch import EncoderTouchComponent
 from Launchkey_MK4.mappings import create_mappings
 from ableton.v3.control_surface import Component
 from ableton.v3.control_surface.capabilities import NOTES_CC, PORTS_KEY, SCRIPT, SYNC, inport, outport
-from ableton.v3.control_surface.controls import ButtonControl, control_matrix
+from ableton.v3.control_surface.controls import ButtonControl, EncoderControl, control_matrix
 from ableton.v3.control_surface.mode import ImmediateBehaviour, make_reenter_behaviour
 
 PAGE_FILE = "/Users/Shared/Flow/Bridge/launchkey-page"
+ENCODERS_FILE = "/Users/Shared/Flow/Bridge/launchkey-encoders"
 
 # The v3 framework has no log_message (that is _Framework's): it logs through
 # Python's logging, which Live writes to its Log.txt.
@@ -63,6 +72,28 @@ class FlowPageComponent(Component):
         super(FlowPageComponent, self).__init__(*a, name="Flow_Page", **k)
 
 
+class FlowEncodersComponent(Component):
+    """Holds the encoders in the Plugin layout's "flow" mode, so Ableton's
+    device control lets go of them. They move nothing in Live: Flow reads them.
+    """
+    encoders = control_matrix(EncoderControl)
+
+    def __init__(self, *a, **k):
+        super(FlowEncodersComponent, self).__init__(*a, name="Flow_Encoders", **k)
+
+
+class FlowEncoderTouchComponent(EncoderTouchComponent):
+    """Ableton's, but quiet while Flow has the encoders: a released encoder
+    is what makes the script write its readout, and it would write "-" over
+    the text Flow keeps there.
+    """
+    flow_owns_encoders = False
+
+    def _set_released(self, index):
+        if not self.flow_owns_encoders:
+            super(FlowEncoderTouchComponent, self)._set_released(index)
+
+
 class FlowToggleComponent(Component):
     toggle_button = ButtonControl(color=None)
 
@@ -80,6 +111,16 @@ def create_flow_mappings(control_surface):
     mappings = create_mappings(control_surface)
     mappings["Daw_Pad_Modes"]["flow"] = dict(component="Flow_Page", pads="main_pads")
     mappings["Flow_Toggle"] = dict(toggle_button="scene_launch_button_with_shift")
+
+    # The Plugin layout becomes two: Ableton's device control, or Flow's.
+    plugin = mappings["Main_Encoder_Modes"]["plugin"]
+    mappings["Plugin_Encoder_Modes"] = dict(enable=False,
+                                            is_private=True,
+                                            live=dict(modes=[m for m in plugin["modes"] if isinstance(m, dict)]),
+                                            flow=dict(component="Flow_Encoders", encoders="encoders"))
+    mappings["Main_Encoder_Modes"]["plugin"] = dict(
+        modes=[dict(component="Plugin_Encoder_Modes")] + [m for m in plugin["modes"] if not isinstance(m, dict)],
+        behaviour=plugin["behaviour"])
 
     # Choosing the DAW layout again on the device flips clip and sequencer, as
     # before - never into the flow page, which only its own toggle reaches.
@@ -102,10 +143,15 @@ class Launchkey_MK4_Flow(Launchkey_MK4):
         self.register_slot(self.component_map["Daw_Pad_Modes"], self._report_page, "selected_mode")
         self.register_slot(self.component_map["Main_Pad_Modes"], self._report_page, "selected_mode")
         self._report_page()
+        self._reported_encoders = None
+        self._report_encoders()
 
     def toggle_flow_page(self):
+        # The encoders' Plugin layout follows the toggle whatever the pads show.
+        self._toggle_flow_encoders()
+
         # Only the DAW layout's pads are the script's to give; on Drum or a
-        # Custom Mode the toggle does nothing.
+        # Custom Mode the toggle does nothing more.
         if self.component_map["Main_Pad_Modes"].selected_mode != "daw":
             return
 
@@ -122,6 +168,39 @@ class Launchkey_MK4_Flow(Launchkey_MK4):
         else:
             self._flow_page_from = daw.selected_mode
             daw.selected_mode = "flow"
+
+    def _toggle_flow_encoders(self):
+        modes = self.component_map["Plugin_Encoder_Modes"]
+        to_flow = modes.selected_mode != "flow"
+        self.component_map["Encoder_Touch"].flow_owns_encoders = to_flow
+        modes.selected_mode = "flow" if to_flow else "live"
+
+        if not to_flow:
+            # Flow wrote these displays meanwhile; each remembers what it last
+            # sent and skips sending it again, so forget it all and resend.
+            for i in range(8):
+                getattr(self.elements, "encoder_{}_display_command".format(i)).clear_send_cache()
+
+        self._report_encoders()
+
+    def _report_encoders(self):
+        owner = "flow" if self.component_map["Plugin_Encoder_Modes"].selected_mode == "flow" else "live"
+
+        if owner == self._reported_encoders:
+            return
+
+        self._reported_encoders = owner
+        self._write_bridge(ENCODERS_FILE, owner)
+
+    def _write_bridge(self, path, word):
+        try:
+            if not os.path.isdir(os.path.dirname(path)):
+                os.makedirs(os.path.dirname(path))
+            with open(path, "w") as f:
+                f.write(word + "\n")
+            logger.info("Launchkey_MK4_Flow: " + os.path.basename(path) + " " + word)
+        except Exception as e:
+            logger.warning("Launchkey_MK4_Flow: could not write " + path + ": " + str(e))
 
     def _report_page(self, *_):
         on_flow = (self.component_map["Main_Pad_Modes"].selected_mode == "daw"
@@ -145,11 +224,12 @@ class Launchkey_MK4_Flow(Launchkey_MK4):
     def disconnect(self):
         # Gone: the pads are Live's again, as far as Flow is concerned.
         self._reported_page = None
-        try:
-            with open(PAGE_FILE, "w") as f:
-                f.write("live\n")
-        except Exception:
-            pass
+        for path in (PAGE_FILE, ENCODERS_FILE):
+            try:
+                with open(path, "w") as f:
+                    f.write("live\n")
+            except Exception:
+                pass
         super(Launchkey_MK4_Flow, self).disconnect()
 
 
@@ -157,5 +237,7 @@ def create_instance(c_instance):
     specification = create_launchkey_specification(FlowElements, create_flow_mappings, midi.MK4_SYSEX_HEADER)
     specification.component_map = dict(specification.component_map,
                                         Flow_Page=FlowPageComponent,
-                                        Flow_Toggle=FlowToggleComponent)
+                                        Flow_Toggle=FlowToggleComponent,
+                                        Flow_Encoders=FlowEncodersComponent,
+                                        Encoder_Touch=FlowEncoderTouchComponent)
     return Launchkey_MK4_Flow(specification=specification, c_instance=c_instance)
