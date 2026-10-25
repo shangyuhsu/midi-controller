@@ -21,8 +21,12 @@ Measured on the device (all ch 16, buttons momentary):
 
 The mode is this script's: Inst flips it, and it is written to
 /Users/Shared/Flow/Bridge/axiom-mode ("flow" or "daw") for Flow, which reads it
-ten times a second - a remote script cannot reach a plugin. The LCD shows "DAW"
-on entering DAW mode; in Flow mode Flow writes the set's name there.
+ten times a second - a remote script cannot reach a plugin.
+
+The LCD has five characters. Flow writes it in Flow mode (the set, knobs,
+presses). In DAW mode this script does: "DAW" at rest; a fader names its
+track ("3 Bas") and then follows its level ("3 -6"); an arm button says
+"3 ARM" / "3 off", then the track's name. Two seconds later, "DAW" again.
 
 Live: a Control Surface row of its own, input and output the Axiom's
 "DirectLink" ports, with Track off for the DirectLink input. Its keys port
@@ -55,6 +59,10 @@ LOOP_CC, REWIND_CC, FORWARD_CC, STOP_CC, PLAY_CC, RECORD_CC = 113, 114, 115, 116
 
 MODE_FILE = "/Users/Shared/Flow/Bridge/axiom-mode"
 
+# In display ticks, about 100 ms each.
+NAME_TICKS = 7
+HOLD_TICKS = 20
+
 
 def _button(cc, name):
     return ButtonElement(True, MIDI_CC_TYPE, CHANNEL, cc, name=name)
@@ -65,6 +73,10 @@ class Axiom_Flow(ControlSurface):
     def __init__(self, *a, **k):
         super(Axiom_Flow, self).__init__(*a, **k)
         self._daw_mode = False
+        self._shown = None
+        self._fader_track = None        # the track whose level is being followed
+        self._fader_name_ticks = 0
+        self._rest_ticks = 0
 
         with self.component_guard():
             self._create_transport()
@@ -93,11 +105,80 @@ class Axiom_Flow(ControlSurface):
 
         self._mixer = MixerComponent(len(faders), name="Mixer", is_enabled=False,
                                      layer=Layer(volume_controls=ButtonMatrixElement(rows=[faders])))
-        self._mixer.master_strip().set_volume_control(SliderElement(MIDI_CC_TYPE, CHANNEL, MASTER_FADER_CC,
-                                                                    name="Master_Volume"))
+        master = SliderElement(MIDI_CC_TYPE, CHANNEL, MASTER_FADER_CC, name="Master_Volume")
+        self._mixer.master_strip().set_volume_control(master)
         self._mixer.set_select_buttons(_button(NEXT_TRACK_CC, "Next_Track_Button"),
                                        _button(PREV_TRACK_CC, "Prev_Track_Button"))
         self._mixer.set_enabled(True)
+
+        self._faders = faders + [master]
+        for fader in self._faders:
+            fader.add_value_listener(self._fader_value, identify_sender=True)
+        for button in self._arm_buttons:
+            button.add_value_listener(self._arm_value, identify_sender=True)
+
+    def _strip_track(self, index):
+        return self._mixer.channel_strip(index)._track
+
+    def _track_label(self, track):
+        """ "3" for the third track, "M" for the master. """
+        if track == self.song().master_track:
+            return "M"
+        tracks = list(self.song().tracks)
+        return str(tracks.index(track) + 1) if track in tracks else "?"
+
+    def _fader_value(self, value, sender):
+        if not self._daw_mode:
+            return
+        index = self._faders.index(sender)
+        track = self.song().master_track if index == len(self._faders) - 1 else self._strip_track(index)
+        if track is None:
+            return
+        if track != self._fader_track:
+            # A new fader: its track's name first, then its level.
+            self._fader_track = track
+            self._fader_name_ticks = NAME_TICKS
+            self._show(self._track_label(track) + " " + track.name)
+        self._rest_ticks = HOLD_TICKS
+
+    def _arm_value(self, value, sender):
+        if not self._daw_mode or value == 0:
+            return
+        index = list(self._arm_buttons).index(sender)
+        # The mixer toggles the arm on this same message; read it a tick later.
+        self.schedule_message(1, self._show_arm, index)
+
+    def _show_arm(self, index):
+        track = self._strip_track(index)
+        if track is None:
+            return
+        self._fader_track = None
+        self._show(self._track_label(track) + (" ARM" if track.arm else " off"))
+        self.schedule_message(NAME_TICKS, self._show_if_resting, self._track_label(track) + " " + track.name)
+        self._rest_ticks = HOLD_TICKS
+
+    def _show_if_resting(self, text):
+        if self._daw_mode and self._fader_track is None:
+            self._show(text)
+
+    def update_display(self):
+        super(Axiom_Flow, self).update_display()
+        if not self._daw_mode:
+            return
+        if self._fader_track is not None:
+            if self._fader_name_ticks > 0:
+                self._fader_name_ticks -= 1
+            else:
+                volume = self._fader_track.mixer_device.volume
+                level = volume.str_for_value(volume.value).replace(" ", "").replace("dB", "")
+                if level.startswith("-") and "." in level:
+                    level = level.split(".")[0]
+                self._show(self._track_label(self._fader_track) + " " + level)
+        if self._rest_ticks > 0:
+            self._rest_ticks -= 1
+            if self._rest_ticks == 0:
+                self._fader_track = None
+                self._show("DAW")
 
     def _inst_value(self, value):
         if value == 0:
@@ -109,6 +190,9 @@ class Axiom_Flow(ControlSurface):
         self._mixer.set_arm_buttons(self._arm_buttons if self._daw_mode else None)
         self._write_mode()
 
+        self._fader_track = None
+        self._rest_ticks = 0
+        self._shown = None      # Flow may have written since
         if self._daw_mode:
             self._show("DAW")
 
@@ -125,6 +209,9 @@ class Axiom_Flow(ControlSurface):
 
     def _show(self, text):
         text = (text + "     ")[:5]
+        if text == self._shown:
+            return
+        self._shown = text
         self._send_midi(DISPLAY_START + tuple(ord(c) if 32 <= ord(c) < 127 else 63 for c in text) + (247,))
 
     def refresh_state(self):
@@ -135,12 +222,19 @@ class Axiom_Flow(ControlSurface):
     def handle_sysex(self, midi_bytes):
         if midi_bytes[:len(SYSEX_START) + 1] == SYSEX_START + (32,):
             self.log_message("Axiom_Flow: the Axiom is in DirectLink mode")
+            self._shown = None
             self._show("DAW" if self._daw_mode else "FLOW")
         else:
             super(Axiom_Flow, self).handle_sysex(midi_bytes)
 
     def disconnect(self):
         self._inst_button.remove_value_listener(self._inst_value)
+        for fader in self._faders:
+            if fader.value_has_listener(self._fader_value):
+                fader.remove_value_listener(self._fader_value)
+        for button in self._arm_buttons:
+            if button.value_has_listener(self._arm_value):
+                button.remove_value_listener(self._arm_value)
         self._daw_mode = False
         self._write_mode()
         self._show("     ")
