@@ -148,6 +148,11 @@ class Axiom_Flow(ControlSurface):
         self._show(self._track_label(track) + " " + track.name)
         self._echo(cc, 127 if track.arm else 0)
 
+    def _relight_arms(self):
+        if self._daw_mode:
+            for index in range(len(ARM_BUTTON_CCS)):
+                self._mixer.channel_strip(index).update()
+
     def _echo(self, cc, value):
         # Sets the number beside the text - see the module's note.
         self._send_midi((0xB0 | CHANNEL, cc, value))
@@ -164,6 +169,10 @@ class Axiom_Flow(ControlSurface):
 
         self._shown = None      # Flow may have written since
         self._show("DAW" if self._daw_mode else "FLOW")
+
+        # Flow turns its set light off as it leaves; light the armed tracks after it.
+        if self._daw_mode:
+            self.schedule_message(3, self._relight_arms)
 
         self.log_message("Axiom_Flow: %s mode" % ("DAW" if self._daw_mode else "Flow"))
 
